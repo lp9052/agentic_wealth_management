@@ -1,0 +1,26 @@
+{
+  "_comment": "Unified ticker configuration. Replaces hard-coded SAFE_TICKERS and is_blue_chip checks.",
+
+  "tickers": {
+    "SPY":   { "suppress_signals": ["HIGH_RISK_PRODUCT", "SPECULATIVE_PRODUCT", "NON_STANDARD_REQUEST"], "note": "S&P 500 ETF — broad market index" },
+    "VOO":   { "suppress_signals": ["HIGH_RISK_PRODUCT", "SPECULATIVE_PRODUCT", "NON_STANDARD_REQUEST"], "note": "Vanguard S&P 500 ETF" },
+    "VTI":   { "suppress_signals": ["HIGH_RISK_PRODUCT", "SPECULATIVE_PRODUCT", "NON_STANDARD_REQUEST"], "note": "Vanguard Total Market ETF" },
+    "IVV":   { "suppress_signals": ["HIGH_RISK_PRODUCT", "SPECULATIVE_PRODUCT", "NON_STANDARD_REQUEST"], "note": "iShares Core S&P 500 ETF" },
+    "QQQ":   { "suppress_signals": ["HIGH_RISK_PRODUCT", "SPECULATIVE_PRODUCT"], "note": "Nasdaq-100 ETF — tech-weighted" },
+    "AAPL":  { "suppress_signals": ["HIGH_RISK_PRODUCT", "SPECULATIVE_PRODUCT"], "note": "Apple Inc." },
+    "MSFT":  { "suppress_signals": ["HIGH_RISK_PRODUCT", "SPECULATIVE_PRODUCT"], "note": "Microsoft Corp." },
+    "GOOG":  { "suppress_signals": ["HIGH_RISK_PRODUCT", "SPECULATIVE_PRODUCT"], "note": "Alphabet Inc. Class C" },
+    "GOOGL": { "suppress_signals": ["HIGH_RISK_PRODUCT", "SPECULATIVE_PRODUCT"], "note": "Alphabet Inc. Class A" },
+    "AMZN":  { "suppress_signals": ["HIGH_RISK_PRODUCT", "SPECULATIVE_PRODUCT"], "note": "Amazon.com Inc." },
+    "META":  { "suppress_signals": ["HIGH_RISK_PRODUCT", "SPECULATIVE_PRODUCT"], "note": "Meta Platforms Inc." },
+    "BRK.B": { "suppress_signals": ["HIGH_RISK_PRODUCT", "SPECULATIVE_PRODUCT"], "note": "Berkshire Hathaway Class B" },
+    "TSLA":  { "suppress_signals": [], "note": "Tesla Inc. — high-vol, no suppression" },
+    "NVDA":  { "suppress_signals": [], "note": "NVIDIA Corp. — high-vol, no suppression" }
+  },
+
+  "derivative_markers": [
+    "option", "call", "put", "strike", "expir", "0dte",
+    "leveraged", "leverag", "inverse", "3x", "2x", "1x",
+    "contract", "collar", "hedge", "short"
+  ]
+}

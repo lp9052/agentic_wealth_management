@@ -1,0 +1,74 @@
+[
+  {
+    "id": "FINRA_2111",
+    "metadata": {
+      "rule": "FINRA Rule 2111",
+      "related": ["FINRA_2090", "SEC_REG_BI"],
+      "tags": ["suitability", "risk tolerance", "investment profile", "recommendation"]
+    },
+    "text": "FINRA Rule 2111 (Suitability) requires that a firm or associated person have a reasonable basis to believe that a recommended transaction or investment strategy involving a security or securities is suitable for the customer, based on the information obtained through the reasonable diligence of the firm or associated person to ascertain the customer's investment profile. A customer's investment profile includes, but is not limited to, the customer's age, other investments, financial situation and needs, tax status, investment objectives, investment experience, investment time horizon, liquidity needs, risk tolerance, and any other information the customer may disclose to the member or associated person in connection with such recommendation."
+  },
+  {
+    "id": "FINRA_2090",
+    "metadata": {
+      "rule": "FINRA Rule 2090",
+      "related": ["FINRA_2111"],
+      "tags": ["know your customer", "KYC", "due diligence"]
+    },
+    "text": "FINRA Rule 2090 (Know Your Customer) requires every member to use reasonable diligence, in regard to the opening and maintenance of every account, to know (and retain) the essential facts concerning every customer and concerning the authority of each person acting on behalf of such customer."
+  },
+  {
+    "id": "SEC_REG_BI",
+    "metadata": {
+      "rule": "SEC Regulation Best Interest (Reg BI)",
+      "related": ["FINRA_2111"],
+      "tags": ["best interest", "duty of care", "conflict of interest", "retail customer"]
+    },
+    "text": "SEC Regulation Best Interest establishes a standard of conduct for broker-dealers and natural persons who are associated persons of a broker-dealer when they make a recommendation to a retail customer of any securities transaction or investment strategy involving securities. A broker-dealer must act in the best interest of the retail customer at the time the recommendation is made, without placing the financial or other interest of the broker-dealer ahead of the interest of the retail customer. It includes Disclosure, Care, Conflict of Interest, and Compliance obligations."
+  },
+  {
+    "id": "SEC_144",
+    "metadata": {
+      "rule": "SEC Rule 144",
+      "related": ["SEC_10b5", "FINRA_3280"],
+      "tags": ["restricted stock", "control securities", "holding period", "liquidity"]
+    },
+    "text": "SEC Rule 144 provides an exemption and permits the public resale of restricted or control securities if a number of conditions are met. Restricted securities are securities acquired in unregistered, private sales from the issuing company. Control securities are those held by an affiliate of the issuing company. The required holding period is generally six months for a reporting company and one year for a non-reporting company. In addition, there must be adequate current public information about the company before the sale can be made. For affiliates, sales are also subject to volume limitations."
+  },
+  {
+    "id": "SEC_10b5",
+    "metadata": {
+      "rule": "SEC Rule 10b-5",
+      "related": [],
+      "tags": ["insider trading", "fraud", "material non-public information", "MNPI"]
+    },
+    "text": "SEC Rule 10b-5 targets employment of manipulative and deceptive practices. It specifically prohibits insider trading, which refers to the buying or selling a security, in breach of a fiduciary duty or other relationship of trust and confidence, on the basis of material, non-public information (MNPI) about the security. It also prohibits 'tipping' such information. Associated persons must never execute trades based on tips from inner circles (executives, board members, corporate insiders) prior to the information becoming public."
+  },
+  {
+    "id": "IRS_WASH_SALE",
+    "metadata": {
+      "rule": "IRS Wash-Sale Rule",
+      "related": ["SEC_10b5"],
+      "tags": ["tax optimization", "loss", "substantially identical", "30 days"]
+    },
+    "text": "The IRS wash-sale rule (Section 1091) prevents a taxpayer from claiming a tax deduction for a security sold in a wash sale. A wash sale occurs when an individual sells or trades a security at a loss and, within 30 days before or after the sale, buys a 'substantially identical' stock or security, or acquires a contract or option to do so. The rule applies across multiple accounts under the same taxpayer's name, including spouses' accounts and IRAs. If a wash sale occurs, the disallowed loss is added to the cost basis of the newly acquired stock."
+  },
+  {
+    "id": "FINRA_3280",
+    "metadata": {
+      "rule": "FINRA Rule 3280",
+      "related": ["FINRA_3240", "SEC_144"],
+      "tags": ["private securities", "selling away"]
+    },
+    "text": "FINRA Rule 3280 governs Private Securities Transactions of an Associated Person, placing strict regulations on 'selling away.' Associated persons must not partake in any private securities transactions outside the regular course or scope of their employment without prior written notice to the associated member."
+  },
+  {
+    "id": "FINRA_3240",
+    "metadata": {
+      "rule": "FINRA Rule 3240",
+      "related": ["FINRA_3280"],
+      "tags": ["borrowing", "lending", "conflict of interest"]
+    },
+    "text": "FINRA Rule 3240 explicitely governs the rules around borrowing from or lending to customers, broadly asserting that a registered person should not act in capacities that create significant conflicts of interest unless certain familial or strict procedural exemptions apply."
+  }
+]

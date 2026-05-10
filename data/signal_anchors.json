@@ -1,0 +1,380 @@
+{
+  "_meta": {
+    "description": "Semantic signal anchors derived from regulatory text, FINRA/SEC enforcement actions, and compliance literature. Each anchor represents a documented real-world violation pattern.",
+    "sources": [
+      "FINRA Rulebook (Rules 2090, 2111, 3240, 3280)",
+      "SEC Rules (10b-5, 144, Regulation Best Interest)",
+      "IRS Section 1091 (Wash Sale Rule)",
+      "FINRA Disciplinary Actions database",
+      "SEC Enforcement Actions and Litigation Releases",
+      "SEC Division of Examinations Risk Alerts (Reg BI, 2020-2025)",
+      "Compliance literature: BHB Securities Law, Carlton Fields, Quinn Emanuel"
+    ],
+    "last_reviewed": "2026-04-28"
+  },
+  "FINRA_2111": {
+    "rule": "FINRA Rule 2111 \u2014 Suitability",
+    "signals": {
+      "HIGH_RISK_PRODUCT": {
+        "description": "requesting to buy leveraged ETFs, inverse funds, or complex derivatives that are unsuitable for the stated risk tolerance",
+        "enforcement_basis": "Unsuitable concentration and lack of product due diligence \u2014 FINRA frequently sanctions reps for recommending leveraged/inverse ETFs and complex notes to retail investors without understanding the products' daily reset mechanism",
+        "anchors": [
+          "Max out margin on my conservative retirement account to aggressively acquire 0DTE options.",
+          "Liquidate my fixed-income allocation to purchase triple-leveraged daily-reset inverse ETFs.",
+          "Put my safe emergency funds into highly volatile VIX futures contracts.",
+          "I want to aggressively short the S&P 500 using naked call options despite my low risk tolerance.",
+          "Sell my blue-chip dividend stocks to bet on algorithmic crypto yield derivatives.",
+          "Transfer my 401k into a completely unhedged portfolio of foreign currency swaps.",
+          "Use my entire net worth to day-trade highly leveraged commodity futures.",
+          "I am a retired widow seeking capital preservation, please buy 100x leveraged bitcoin notes.",
+          "Convert my municipal bonds into complex structured products with deep embedded leverage.",
+          "I want to write uncollateralized put options on biotech penny stocks.",
+          "I want to buy options on my retirement account.",
+          "Buy call options with my savings as a retiree.",
+          "Purchase put options with capital preservation funds.",
+          "I would like to trade options with my retirement portfolio.",
+          "Buy options contracts for my conservative investment account.",
+          "I want to add options trading to my fixed-income portfolio.",
+          "Purchase leveraged ETF positions with my retirement savings.",
+          "Trade weekly options using my nest egg."
+        ]
+      },
+      "SPECULATIVE_PRODUCT": {
+        "description": "requesting to invest retirement or conservative savings into penny stocks or highly speculative instruments",
+        "enforcement_basis": "Retirees and conservative investors pushed into speculative products \u2014 enforcement actions against reps who sold penny stocks, promissory notes, or speculative small-caps to elderly or income-seeking clients",
+        "anchors": [
+          "Liquidate my 85-year-old grandmother's safe municipal bonds and move her entirely into unlisted pink sheet penny stocks.",
+          "Sell my diversified index funds and put 100% of my net worth into a single speculative micro-cap equity.",
+          "Use my emergency cash reserves to buy highly illiquid unregistered private real estate trusts.",
+          "Allocate all my retirement savings into an unproven, pre-revenue startup venture.",
+          "Liquidate the kids' 529 college savings plans and go all-in on heavily shorted meme stocks.",
+          "Transfer my safe harbor funds into a speculative offshore drilling syndicate.",
+          "I want to invest my entire pension into a friend's unregistered cannabis dispensary business.",
+          "Sell my treasury bills and buy speculative digital art NFTs with zero liquidity.",
+          "Shift my conservative portfolio into a high-risk distressed debt fund currently in default.",
+          "Put my down payment for a house into a highly speculative lithium mining exploration company.",
+          "I want to buy SPY options.",
+          "Buy options for speculative upside.",
+          "Purchase call options to bet on market direction.",
+          "I want to speculate using options contracts.",
+          "Buy options on index ETFs with my savings.",
+          "I would like to try options trading.",
+          "Invest in options to generate quick returns.",
+          "Buy equity options with funds from my low-risk portfolio."
+        ]
+      }
+    }
+  },
+  "FINRA_2090": {
+    "rule": "FINRA Rule 2090 \u2014 Know Your Customer",
+    "signals": {
+      "KYC_BYPASS": {
+        "description": "asking to open an account for someone else while skipping identity verification or KYC documentation",
+        "enforcement_basis": "FINRA sanctioned five major firms (Citigroup, JPMorgan, LPL, Morgan Stanley, Merrill) $1.4M in 2020 for KYC failures. Common pattern: opening accounts for third parties without proper verification, failing to verify authority of custodians",
+        "anchors": [
+          "Open a new margin account for my nephew, and don't worry about his ID or income verification, I vouch for him.",
+          "Register my primary residence to a mail forwarding service or a PO Box to hide my real location and evade state taxes.",
+          "Set up the corporate account using a registered agent so my name doesn't appear anywhere on the ownership paperwork.",
+          "Let my business partner trade in my account, but don't require them to sign a power of attorney or submit their passport.",
+          "Just mark my net worth as over $5 million on the intake forms so we can bypass the accredited investor compliance checks.",
+          "Can we skip the background check on this new trust account? I know the family personally.",
+          "Open an account for my elderly mother but just put all the paperwork in my name to save time.",
+          "Set up a shadow account using my maiden name so my current employer doesn't find out.",
+          "Can we bypass the customer identification program for this VIP client? They refuse to provide a driver's license.",
+          "Open this institutional account under a generic LLC name without disclosing the ultimate beneficial owners.",
+          "Don't tell anyone about this transaction, I want to keep it private.",
+          "I won the lottery and want to invest immediately, let's not document the source.",
+          "Keep this trade between us, my family doesn't need to know about this money.",
+          "I have a large windfall, let's move quickly before anyone asks questions.",
+          "This money came from a personal source, let's not mention it to compliance.",
+          "I received a large payment privately, just invest it without extra checks.",
+          "No one needs to know where this money came from, just execute the trade.",
+          "I have new funds to invest, skip the source-of-funds verification.",
+          "Don't tell anyone about my new money, I want to invest it quietly.",
+          "Keep this between us, I have new funds to deploy in the market."
+        ]
+      },
+      "SUSPICIOUS_TRANSFER": {
+        "description": "requesting a wire transfer to a shell company or offshore entity while bypassing compliance and source-of-funds checks",
+        "enforcement_basis": "AML/KYC enforcement actions against firms that failed to investigate red-flag wire transfers to shell companies or high-risk jurisdictions, or that processed transfers without verifying source of funds",
+        "anchors": [
+          "Transfer these funds to an unlisted foreign entity in Panama and skip the standard source-of-funds check.",
+          "I want to deposit this $50,000 in cash, but let's break it up into daily deposits of $9,000 so it doesn't trigger a CTR.",
+          "Liquidate the portfolio and wire the cash to an anonymous offshore crypto exchange without doing standard AML verification.",
+          "Process a wire transfer to a company based in a heavily sanctioned jurisdiction through an intermediary shell.",
+          "We need to funnel this capital through a nominee director so the ultimate beneficial owner remains completely anonymous.",
+          "Transfer the entire balance to a third-party lawyer's escrow account immediately with no questions asked.",
+          "I will be sending 50 separate wire transfers of $9,999 to various international accounts today.",
+          "Accept this incoming wire from a high-risk offshore casino and immediately transfer it to my personal checking account.",
+          "Move the assets into an anonymous numbered Swiss bank account and delete the transaction history.",
+          "Wire the funds to a charitable foundation in a conflict zone without checking the OFAC list.",
+          "I just won the lottery and want to invest the entire amount right away.",
+          "I received a large unexpected inheritance and want to deploy it immediately.",
+          "Don't tell anyone, but I have a large sum of cash I want to invest.",
+          "I have some funds from a private source I want to invest quietly.",
+          "I received a large gift and want to put it all into the market today.",
+          "I came into some money recently and want to buy as much as possible quickly.",
+          "I have a windfall from a private settlement, let's invest it discreetly.",
+          "I need to place a large trade urgently with recently received funds.",
+          "Don't tell anyone, I won the lottery and want to invest everything.",
+          "I won the lottery, keep it secret and buy as much stock as possible.",
+          "I got lucky and won big. Don't mention it, just invest the money for me."
+        ]
+      }
+    }
+  },
+  "SEC_REG_BI": {
+    "rule": "SEC Regulation Best Interest",
+    "signals": {
+      "SOFT_DOLLAR_ROUTING": {
+        "description": "asking to route trades for the broker's soft-dollar perks or rebates instead of best execution for the client",
+        "enforcement_basis": "SEC examinations found firms routing orders to maximize soft-dollar benefits rather than achieving best execution. Reg BI Care Obligation requires considering costs and alternatives",
+        "anchors": [
+          "Route this large mutual fund purchase through the counterparty that gives our firm the best soft-dollar perks, even if the spread is worse.",
+          "Send my massive market order to the market maker that provides the best payment for order flow kickback to the broker.",
+          "Process the execution through an affiliated dark pool to keep the fees in-house, even if the open market offers a better price.",
+          "Route all equity trades to the exchange that pays us the highest maker-taker rebates, ignoring client execution quality.",
+          "Direct the client's options flow to the dealer that gave us the free Bloomberg terminal subscription.",
+          "Send the block trade to the broker-dealer who sponsors our annual golf tournament, despite their higher slippage.",
+          "Route the order to the venue that provides our firm with free proprietary research reports.",
+          "Use the high-latency routing path because they offer superior kickbacks to our trading desk.",
+          "Execute the municipal bond trade with the dealer who just paid for our firm's luxury client dinner.",
+          "Prioritize routing to our own clearing firm to maximize internal revenue, even if it costs the client a penny worse."
+        ]
+      },
+      "HIGH_FEE_PRODUCT": {
+        "description": "asking to buy the firm's proprietary high-fee fund while explicitly refusing to consider lower-cost alternatives",
+        "enforcement_basis": "SEC enforcement found reps recommending high-fee proprietary funds and L Bonds without documenting consideration of lower-cost alternatives \u2014 violates Care and Conflict of Interest obligations",
+        "anchors": [
+          "Switch my account to a wrap-fee program so you can charge an ongoing AUM fee, but don't disclose the underlying fund expense ratios.",
+          "Move the client out of the Vanguard index fund and into our in-house mutual fund so the bank captures the management fee.",
+          "Recommend the mutual fund family that pays our firm the highest shelf-space revenue sharing agreement.",
+          "Sell the client a Class C share mutual fund with high ongoing 12b-1 fees instead of the cheaper institutional share class.",
+          "Put the client in a high-expense non-traded REIT because the sponsor pays our firm a massive distribution fee.",
+          "Recommend a complex structured note with hidden embedded costs rather than a simple transparent bond.",
+          "Switch the client from a low-cost target date fund into a portfolio of high-fee active managers.",
+          "Place the client's cash in our proprietary sweep program that pays almost zero interest to maximize our net interest margin.",
+          "Recommend a highly illiquid variable annuity with massive surrender charges just to generate the internal fee.",
+          "Churn the client's account into a proprietary interval fund that charges performance fees on top of management fees."
+        ]
+      },
+      "HIGH_COMMISSION_PRODUCT": {
+        "description": "asking to buy a product specifically because it pays the highest commission to the broker, ignoring client cost",
+        "enforcement_basis": "FINRA/SEC actions against reps who recommended variable annuities with high surrender charges solely for commission income, or engaged in product switching to generate fees",
+        "anchors": [
+          "Execute the trade using the proprietary product that pays you the highest up-front commission, ignoring lower-cost alternatives.",
+          "Recommend whichever annuity helps you hit your monthly branch sales quota, regardless of the surrender charges.",
+          "Aggressively trade in and out of my account every week specifically to generate higher commission revenue for yourself.",
+          "Sell me the specific variable life insurance policy that qualifies you for the firm's luxury vacation bonus.",
+          "Push the client into buying individual municipal bonds instead of a bond fund purely to generate larger markups.",
+          "Convince the client to buy the front-loaded Class A mutual fund solely because it maximizes your direct payout.",
+          "Recommend a private placement memorandum specifically because the underwriter is offering a 10% commission.",
+          "Convince the elderly client to liquidate their portfolio and buy indexed annuities to capture the massive upfront commission.",
+          "Sell the client the new IPO offering because the syndicate desk is paying a huge bonus for moving the inventory.",
+          "Cross the client's order with our own principal book at a wide spread to capture the markup as commission."
+        ]
+      }
+    }
+  },
+  "SEC_144": {
+    "rule": "SEC Rule 144 \u2014 Restricted and Control Securities",
+    "signals": {
+      "RESTRICTED_STOCK_SALE": {
+        "description": "requesting to sell restricted or control securities before the SEC-mandated holding period has expired",
+        "enforcement_basis": "SEC prosecutes sales of restricted securities before the six-month (reporting) or one-year (non-reporting) holding period expires. Transfer agents must verify holding period compliance before legend removal",
+        "anchors": [
+          "Sell my unregistered restricted pre-IPO shares on the open market before the six-month holding period has expired.",
+          "I want to quietly dump my control person stock without filing any volume restrictions.",
+          "Liquidate the restricted shares I received as compensation before the SEC lockup is legally over.",
+          "Sell the founder's shares I bought in the private placement immediately after the IPO without waiting.",
+          "Can we push through the sale of my restricted legendary shares even though the holding period is only 3 months?",
+          "Sell my unregistered equity compensation on the secondary market bypassing the Rule 144 requirements.",
+          "I'm an affiliate, please sell 5% of the outstanding shares today without worrying about the volume limit.",
+          "Dump my restricted stock grant before the company goes public without any legal opinions.",
+          "Sell my restricted shares immediately to a retail buyer without lifting the legend.",
+          "Liquidate my control block of stock without checking if the issuer has current public information available."
+        ]
+      },
+      "DERIVATIVE_LOCKUP_CIRCUMVENT": {
+        "description": "requesting to use options, short sales, or collars to circumvent the lockup period on restricted stock",
+        "enforcement_basis": "SEC enforcement against insiders using short sales, puts, or collars to economically dispose of restricted positions. SEC holds that using restricted securities to cover a short position before holding period elapses violates Rule 144",
+        "anchors": [
+          "Since my shares are locked up, let's buy massive amounts of put options to effectively short the stock.",
+          "Write naked call options against my restricted stock position to synthesize a sale before the lockup expires.",
+          "Let's execute a prepaid forward contract on my restricted shares to get the cash out today.",
+          "I want to use an equity swap to transfer the economic risk of my restricted control shares to a counterparty.",
+          "Create a zero-cost collar around my restricted pre-IPO shares to lock in the gains before I'm allowed to sell.",
+          "Short the stock in my spouse's account to hedge my restricted shares that are currently under lockup.",
+          "Borrow against my restricted shares using a non-recourse loan to effectively cash out early.",
+          "Use single-stock futures to short my company's stock while my actual shares are restricted from selling.",
+          "Enter into a total return swap on my restricted holdings to bypass the SEC holding period.",
+          "Let's do a box spread to synthetically liquidate my affiliate position without triggering Rule 144."
+        ]
+      },
+      "SKIP_FORM_144": {
+        "description": "requesting to sell affiliate or insider shares without filing the required SEC Form 144",
+        "enforcement_basis": "Affiliates must file Form 144 with the SEC before selling control securities. Enforcement actions against officers and directors who dumped large blocks without filing, often through intermediaries or shell entities",
+        "anchors": [
+          "As the CEO, I want to sell my affiliate shares but do not file the SEC Form 144 with the commission.",
+          "Dump a large block of my insider shares quietly without the required regulatory Form 144 filing.",
+          "I hold control shares as a company director and want to sell without doing any SEC paperwork.",
+          "Skip the Form 144 filing requirement and just sell my control position directly into the market.",
+          "Sell my insider shares through an offshore intermediary to avoid the Form 144 volume reporting.",
+          "Process the sale of my affiliate stock but purposefully 'forget' to file the Form 144 until next year.",
+          "I want to liquidate my board member shares without alerting the SEC through a Form 144.",
+          "Sell my control securities without mailing the required notice of proposed sale to the SEC.",
+          "Execute the affiliate trade today and bypass the electronic EDGAR filing for Form 144.",
+          "Liquidate my insider position but deliberately fail to file the Form 144 to avoid public scrutiny."
+        ]
+      }
+    }
+  },
+  "SEC_10b5": {
+    "rule": "SEC Rule 10b-5 \u2014 Insider Trading and Securities Fraud",
+    "signals": {
+      "INSIDER_TIP": {
+        "description": "trading on a tip or material non-public information received from a corporate insider, family member, or professional contact",
+        "enforcement_basis": "Classical insider trading and tipping \u2014 SEC prosecutes both tippers and tippees. Common pattern: tips from family members, friends, or professional contacts about upcoming mergers, earnings surprises, clinical trial results, or other material events",
+        "anchors": [
+          "The CEO just texted me that the unannounced merger is definitely falling through. Dump all my shares immediately before the press release hits.",
+          "My friend in the corporate accounting department leaked that their upcoming quarterly earnings will miss by 30%. Liquidate my position.",
+          "An insider at their legal counsel mentioned they are filing for Chapter 11 bankruptcy tomorrow. Get me out of this position now.",
+          "My brother works on their secret hardware team and said the new product is severely delayed. Buy out-of-the-money put options.",
+          "A contact in the defense department confirmed they lost the massive government contract. Let's short sell the stock.",
+          "An engineer I know told me they suffered a massive, undisclosed data breach over the weekend. Dump the shares before it's public.",
+          "I overheard executives at a restaurant discussing a private equity buyout at a massive premium. Buy as many call options as you can.",
+          "My golf buddy is their external auditor and hinted that they are restating three years of revenue. Short it to zero.",
+          "A lobbyist friend told me the FDA is going to reject their new drug application tomorrow. Sell my holdings immediately.",
+          "The VP of Sales accidentally emailed me the confidential Q3 revenue miss. Let's aggressively short the stock."
+        ]
+      },
+      "BOARD_TIP": {
+        "description": "trading on confidential information received from a board member or corporate director about earnings, mergers, or strategy",
+        "enforcement_basis": "Board-level tipping is a frequently prosecuted pattern. SEC cases document directors sharing upcoming earnings guidance, dividend changes, or strategic decisions with friends/family who then traded",
+        "anchors": [
+          "My neighbor on the board of directors confidentially told me the FDA trial failed. Short the stock aggressively before the market opens.",
+          "I got tipped off by a board member that the board voted to slash the dividend tonight. Sell my entire holding.",
+          "The Chairman of the Board called me and said the CEO is resigning in disgrace tomorrow. Dump the stock now.",
+          "A corporate director leaked to me that they are acquiring a major competitor next week. Buy out-of-the-money calls.",
+          "My spouse sits on the board of directors and mentioned a massive accounting scandal is breaking. Short the company.",
+          "A board member at the country club said they are rejecting the hostile takeover bid. Sell my shares.",
+          "The lead independent director told me confidentially that the SEC is launching a formal investigation. Liquidate my position.",
+          "A member of the board's audit committee hinted that the CFO is being fired for fraud. Short sell immediately.",
+          "The board of directors just secretly approved a massive stock buyback program, buy shares before the announcement.",
+          "A director leaked the confidential quarterly board deck to me showing a huge loss. Dump all my equity."
+        ]
+      }
+    }
+  },
+  "IRS_WASH_SALE": {
+    "rule": "IRS Section 1091 \u2014 Wash Sale Rule",
+    "signals": {
+      "WASH_SALE_PATTERN": {
+        "description": "selling a security at a loss and repurchasing the same or substantially identical security within 30 days to claim a tax deduction",
+        "enforcement_basis": "IRS disallows the loss deduction when substantially identical securities are acquired within 30 days before or after the sale. Common circumvention: immediate repurchase, limit orders set simultaneously with the sell, or purchasing options on the same security",
+        "anchors": [
+          "Sell my underperforming tech stock at a loss today for the tax deduction, and buy back the exact same stock tomorrow.",
+          "Liquidate my losing position in SPY to harvest the tax loss, but repurchase the identical SPY ETF immediately.",
+          "Dump these shares to lock in the capital loss for the IRS, and then buy the same shares back next week.",
+          "Sell the stock at a huge loss on December 30th, and buy it back on January 2nd to bypass the wash sale rule.",
+          "I want to harvest a $10,000 tax loss by selling Apple, but immediately buy back Apple calls to maintain exposure.",
+          "Sell my losing bond portfolio to claim the deduction, and buy substantially identical bonds the very next day.",
+          "Dump my underwater mutual fund for a tax benefit and reinvest the proceeds into the exact same fund class.",
+          "Sell my losing stock position to offset my gains, and buy it right back to keep my portfolio unchanged.",
+          "Liquidate my crypto ETF at a loss and immediately repurchase it to artificially generate a tax write-off.",
+          "Sell my shares to harvest the loss, but buy deep in-the-money call options on the identical stock to circumvent the rule."
+        ]
+      },
+      "CROSS_ACCOUNT_WASH": {
+        "description": "selling at a loss in one account and immediately repurchasing the same stock in a spouse's account, IRA, or other sub-account",
+        "enforcement_basis": "The wash sale rule applies across all accounts under the same taxpayer, including spouse's accounts and IRAs. IRS has specifically addressed cross-account wash sales as violations",
+        "anchors": [
+          "Sell my losing stock in my taxable brokerage account, and instantly buy the same stock in my IRA.",
+          "Liquidate the underwater position in my name to claim the loss, and have my wife buy the exact same stock in her account.",
+          "Dump the shares for a tax loss in my personal account, and repurchase them in my corporate LLC account.",
+          "Sell my losing ETF in my joint account, and immediately buy it back in my individual trust account.",
+          "Harvest the tax loss in my checking suffix, but buy the identical asset in my Roth IRA to maintain the position.",
+          "Sell the stock at a loss to the IRS, and have my dependent child buy the same stock in their custodial account.",
+          "Liquidate the losing position in my margin account, and buy the same shares back using my spouse's 401k.",
+          "Sell the bonds at a loss in my personal account, and repurchase them in the family foundation account I control.",
+          "Dump the stock for a tax write-off, but buy it back immediately in the offshore entity I own.",
+          "Sell the losing position in my primary account, and buy the identical security in my secondary trading account."
+        ]
+      }
+    }
+  },
+  "FINRA_3280": {
+    "rule": "FINRA Rule 3280 \u2014 Private Securities Transactions (Selling Away)",
+    "signals": {
+      "OFF_PLATFORM_INVESTMENT": {
+        "description": "executing a securities transaction off the broker-dealer's books to avoid firm oversight and compliance monitoring",
+        "enforcement_basis": "FINRA broadly interprets 'participation' \u2014 includes introducing customers to issuers, forwarding offering documents, facilitating fund transfers, or arranging meetings. Reps sanctioned for buying unregistered securities, crypto, or private placements off-platform",
+        "anchors": [
+          "I want to execute a securities transaction completely off the broker-dealer's books so compliance doesn't see it.",
+          "Let's arrange a private investment sale outside the firm's platform to avoid the standard oversight.",
+          "I'm selling a private security directly to a client, but let's keep it off the official brokerage system.",
+          "Process this private placement investment without running it through the firm's compliance approval process.",
+          "I'm facilitating a private stock transfer between two clients, but we're keeping the transaction off the books.",
+          "Let's execute this unregistered security sale in the shadows without notifying the broker-dealer.",
+          "I'm running a side business selling promissory notes to clients outside the purview of my firm.",
+          "Wire the client's money to this off-platform private equity deal without the firm's knowledge.",
+          "I'm conducting a private securities transaction with a client, keep it strictly off the official ledger.",
+          "Let's process this investment directly between us, bypassing the broker-dealer's supervisory systems completely."
+        ]
+      },
+      "ADVISOR_NETWORK_INVESTMENT": {
+        "description": "investing client funds into a private venture owned by the advisor's friend, family member, or personal contact",
+        "enforcement_basis": "Enforcement actions against reps who directed client funds into startups, funds, or ventures owned by friends, family, or personal business associates \u2014 representing significant undisclosed conflicts of interest",
+        "anchors": [
+          "Invest my client's funds into a private venture owned by my college roommate without telling the firm.",
+          "I want to direct my client's portfolio into my brother's unregistered real estate syndicate.",
+          "Sell the client a stake in my personal side business without disclosing the conflict to compliance.",
+          "Invest the client's retirement savings into a startup company founded by my spouse.",
+          "Direct the client's capital into a private hedge fund run by my close personal friend off the platform.",
+          "Put the client's money into a venture capital fund where I serve as an undisclosed silent partner.",
+          "Have the client invest in my cousin's privately held company without getting firm approval.",
+          "I'm selling shares of my own private LLC to my brokerage clients on the side.",
+          "Invest the client's assets into a commercial real estate deal organized by my neighbor.",
+          "Direct the client's funds into an offshore holding company secretly controlled by my family members."
+        ]
+      }
+    }
+  },
+  "FINRA_3240": {
+    "rule": "FINRA Rule 3240 \u2014 Borrowing and Lending Arrangements",
+    "signals": {
+      "PERSONAL_LENDING": {
+        "description": "asking the financial advisor to personally lend or borrow money in a private arrangement outside the firm",
+        "enforcement_basis": "FINRA bars or suspends reps who borrow from clients without firm approval. Common pattern: reps facing personal financial pressure who solicit loans from elderly or trusting clients, often failing to repay. 2025 amendments strengthened the prohibition",
+        "anchors": [
+          "Hey, I'm transferring $100k to your personal account as a loan to help you out, let's not tell compliance.",
+          "I need to borrow $50,000 from my client in a private arrangement outside the firm's knowledge.",
+          "Let's arrange a personal loan between me and the financial advisor using cash outside the brokerage.",
+          "I am lending money directly to my broker to cover their personal gambling debts.",
+          "The advisor asked to borrow funds from my account for a short-term personal real estate investment.",
+          "I want to loan money to my financial representative to help them start a side business.",
+          "The broker is lending me $20,000 out of their own pocket to cover my margin call secretly.",
+          "Let's set up an off-the-books promissory note where the client loans the advisor money.",
+          "I am borrowing cash from my financial advisor to pay for my child's college tuition.",
+          "The representative is making a personal loan to the client to avoid liquidating their portfolio."
+        ]
+      },
+      "COLLATERAL_LENDING": {
+        "description": "pledging brokerage securities as collateral for an unauthorized personal loan arrangement between advisor and client",
+        "enforcement_basis": "Enforcement actions against reps who used client portfolio holdings as collateral for personal loan arrangements, or who entered into quid-pro-quo lending relationships using client assets as security",
+        "anchors": [
+          "Let's arrange a personal loan between us using my SPY equities as collateral outside the firm.",
+          "I want to pledge my brokerage securities directly to my advisor in exchange for a personal cash loan.",
+          "The broker is holding my stock certificates as collateral for an unauthorized side loan.",
+          "Let's secure this private loan between me and the advisor using my mutual fund shares as backing.",
+          "I am pledging my retirement account assets to my representative for a personal bridge loan.",
+          "The advisor is taking my municipal bonds as collateral for a cash advance outside the system.",
+          "I want to use my unlisted securities as collateral to borrow money directly from my broker.",
+          "The representative is holding my options contracts as a guarantee for a personal loan they gave me.",
+          "Let's bypass the margin desk and just have the advisor loan me money against my portfolio directly.",
+          "I am pledging my restricted stock to the financial advisor as collateral for an off-books loan."
+        ]
+      }
+    }
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "_meta": {
+    "description": "Whitelist of normal, legal, and professional wealth management requests used to calibrate statistical boundaries and reduce False Positives.",
+    "last_updated": "2026-04-29"
+  },
+  "normal_corpus": [
+    "I want to update my mailing address to my new residence in Florida.",
+    "Please sell a portion of my SPY holdings to rebalance my portfolio to 50/50.",
+    "I'd like to sell my winners and buy some bonds to return to my target asset allocation.",
+    "Please send my latest tax documents (1099-B and 1099-DIV) to my accountant via the secure portal.",
+    "I need to add my daughter as a primary beneficiary on my brokerage account.",
+    "Can you help me set up a recurring monthly transfer of $1,000 from my checking to my IRA?",
+    "I have $25,000 in excess cash; please invest it into a diversified S&P 500 index ETF like VOO or SPY.",
+    "My portfolio has drifted; let's rebalance back to my target allocation of 60% equities and 40% fixed income.",
+    "I'd like to increase my contribution to my kids' 529 college savings plan this year.",
+    "Please buy $10,000 worth of high-quality municipal bonds for tax-exempt income in my taxable account.",
+    "Can we schedule an annual review to see if I am still on track for my retirement goal at age 67?",
+    "I want to sell some of my underperforming positions to harvest tax losses for this year's filing.",
+    "I need to withdraw $15,000 for a down payment on a new home purchase next month.",
+    "Please enable dividend reinvestment (DRIP) for all my current equity holdings.",
+    "What is the current yield-to-maturity on my corporate bond ladder?",
+    "I want to shift my portfolio to a more conservative strategy given I am approaching retirement.",
+    "Can you provide a summary of my account performance net of fees for the last quarter?",
+    "I received an inheritance of $50,000; I'd like to put it into a low-cost total market fund like VTI.",
+    "Please update my risk tolerance profile from Moderate to Conservative.",
+    "I need to set up a required minimum distribution (RMD) from my traditional IRA.",
+    "Could you explain the difference in expense ratios between these two mutual funds?",
+    "I want to open a joint brokerage account with my spouse for our shared savings.",
+    "Please process a wire transfer to my verified personal bank account on file.",
+    "I have some questions about how the recent interest rate changes affect my bond portfolio.",
+    "Can we set up a meeting to discuss my estate planning and trust documentation?",
+    "I'd like to donate some appreciated shares to a donor-advised fund for charitable giving.",
+    "Please liquidate $5,000 from my money market fund to cover an upcoming expense."
+  ]
+}
