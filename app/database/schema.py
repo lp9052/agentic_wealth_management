@@ -77,9 +77,27 @@ def init_schema(db_path: str = DB_PATH) -> None:
         CREATE TABLE IF NOT EXISTS evidence_fallbacks (
             evidence_id TEXT PRIMARY KEY,
             kyc_id TEXT NOT NULL REFERENCES kyc_requirements(kyc_id),
-            description TEXT
+            description TEXT,
+            is_ack INTEGER NOT NULL DEFAULT 0
         )
     """)
+
+    # Idempotent migration: pre-existing DBs created before is_ack was added
+    # get the column injected with the default 0.  The seed (or the
+    # _ACK_EVIDENCE_IDS UPDATE below) then sets it to 1 where appropriate.
+    existing_cols = {row[1] for row in cursor.execute("PRAGMA table_info(evidence_fallbacks)").fetchall()}
+    if "is_ack" not in existing_cols:
+        cursor.execute("ALTER TABLE evidence_fallbacks ADD COLUMN is_ack INTEGER NOT NULL DEFAULT 0")
+        logger.info("evidence_fallbacks: added is_ack column (migration).")
+
+    # Backfill is_ack=1 for the canonical client-acknowledgment evidence so
+    # any DB — freshly seeded or evolved — agrees with the EvidenceFallback
+    # contract.  Idempotent: re-running is a no-op once values are set.
+    _ACK_EVIDENCE_IDS = ("EVID_RISK_OVERRIDE_ACK", "EVID_SUITABILITY_ACK", "EVID_CONCENTRATION_ACK")
+    cursor.execute(
+        "UPDATE evidence_fallbacks SET is_ack=1 WHERE evidence_id IN (?, ?, ?) AND is_ack=0",
+        _ACK_EVIDENCE_IDS,
+    )
 
     # -----------------------------------------------------------------------
     # Client State Tables

@@ -245,7 +245,8 @@ def run_static_checks(
                         f"Concentration risk: post-trade {ticker} position would be "
                         f"{post_pct:.0%} of the total portfolio value (limit: {CONCENTRATION_LIMIT:.0%})"
                     ),
-                    missing_evidence_id="EVID_CONCENTRATION_ACK"
+                    missing_evidence_id="EVID_CONCENTRATION_ACK",
+                    is_ack=True,
                 ))
 
     elif action == "SELL" and ticker:
@@ -427,13 +428,18 @@ def evaluate_proposal(
 
     # Build a lookup of evidence_id → fallback description text during rule traversal.
     # This avoids a second iteration of the regulations list later in Step 14.
+    # evidence_is_ack carries the AST-declared "this evidence is a client
+    # acknowledgment" flag — used by the C_ev fast-path so we don't infer ACK
+    # status from a naming convention on the evidence_id.
     evidence_descriptions: dict[str, str] = {}
+    evidence_is_ack: dict[str, bool] = {}
     for reg in regulations:
         for clause in reg.clauses:
             for cond in clause.conditions:
                 for kyc in cond.kyc_requirements:
                     if kyc.fallback:
                         evidence_descriptions[kyc.fallback.evidence_id] = kyc.fallback.description
+                        evidence_is_ack[kyc.fallback.evidence_id] = kyc.fallback.is_ack
     
     # ── Map provided evidence ────────────────────────────────────────────────
     evidence_map = {e.evidence_id: e.scrap for e in proposal.provided_evidence}
@@ -527,11 +533,14 @@ def evaluate_proposal(
     # uses min(scores) as the rule's C_ev (weakest link).
     evidence_scores: dict[str, float] = {}
 
-    # Also add static check evidence descriptions not covered by regulations
+    # Also add static check evidence descriptions not covered by regulations.
+    # The AST-loaded evidence_is_ack flag takes precedence; only fall back to the
+    # FailedRuleDetail.is_ack when the evidence isn't declared in the AST at all.
     for f in static_failures:
         if f.missing_evidence_id and f.missing_evidence_id not in evidence_descriptions:
             # Use the failure description as a proxy
             evidence_descriptions[f.missing_evidence_id] = f.description
+            evidence_is_ack[f.missing_evidence_id] = f.is_ack
 
     for ev_id in set(all_missing_evidence):
         if ev_id in provided_ev_ids:
@@ -543,16 +552,18 @@ def evaluate_proposal(
                     desc = evidence_descriptions.get(ev_id, "")
                     if desc:
                         # Fast-path for explicit user acknowledgments.
-                        # Comparing "yes" to a 20-word legal description yields very low semantic similarity.
+                        # Comparing "yes" to a 20-word legal description yields very low semantic similarity,
+                        # so when the AST has marked this evidence as an ACK we accept any affirmative reply.
                         affirmative_keywords = {"yes", "yep", "sure", "understand", "agree", "confirm", "proceed", "acknowledge"}
-                        if ev_id.endswith("_ACK") and any(k in scrap.lower() for k in affirmative_keywords):
+                        is_ack_evidence = evidence_is_ack.get(ev_id, False)
+                        if is_ack_evidence and any(k in scrap.lower() for k in affirmative_keywords):
                             sim = 1.0
                             logger.info("Evidence '%s': Fast-path ACK match for scrap=%r", ev_id, scrap)
                         else:
                             sim = get_embedding_similarity(scrap, desc)
-                            
+
                         evidence_scores[ev_id] = max(sim, 0.0)
-                        if sim != 1.0 or not ev_id.endswith("_ACK"):
+                        if sim != 1.0 or not is_ack_evidence:
                             logger.info(
                                 "Evidence '%s': C_ev = %.3f (scrap=%r vs desc=%r)",
                                 ev_id, evidence_scores[ev_id],

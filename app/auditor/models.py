@@ -84,6 +84,10 @@ class FailedRuleDetail:
     severity: Severity
     description: str
     missing_evidence_id: Optional[str] = None
+    # True when missing_evidence_id is a user acknowledgment that an affirmative
+    # reply ("yes", "agree", …) is sufficient to cure.  Used by the C_ev
+    # fast-path so the auditor doesn't have to recognize ACK evidence by its ID.
+    is_ack: bool = False
 
 
 @dataclass
@@ -139,6 +143,11 @@ class EvidenceFallback:
     evidence_id: str
     kyc_id: str
     description: str
+    # True when this evidence is a user acknowledgment (e.g. "I accept the
+    # risk").  An affirmative reply qualifies as a perfect-coverage scrap;
+    # the auditor's C_ev step uses this instead of pattern-matching on the
+    # evidence_id naming convention.
+    is_ack: bool = False
 
 
 @dataclass

@@ -34,6 +34,7 @@ def load_all_regulations(db_path: str = DB_PATH) -> list[Regulation]:
             evidence_id=row["evidence_id"],
             kyc_id=row["kyc_id"],
             description=row["description"] or "",
+            is_ack=bool(row["is_ack"]),
         )
 
     # 2. Load all KYC requirements keyed by condition_id
