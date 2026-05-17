@@ -5,7 +5,8 @@ Pipeline stages handled here:
   Step 2 : Static portfolio checks   — funds, holdings, AML/KYC, concentration
   Step 3 : Signal detection          — semantic embeddings vs anchors (imported)
   Step 4 : Ticker-context tagging    — tag is_derivative & suppress false-positive signals
-  Step 5 : Cascading audit setup     — dynamically resolve adjacency from regulations.json
+  Step 5 : Cascading audit setup     — load adjacency map (force-evaluations are populated
+                                       later, when a regulation actually fails)
   Step 6 : Regulatory evaluation     — trigger match → KYC gate → collect evidence reqs
   Step 7 : Evidence scoring          — continuous C_ev via ensemble embedding model
   Step 8 : Audit risk scoring        — SBC authoritative composite score (TSF)
@@ -413,15 +414,13 @@ def evaluate_proposal(
     proposal.prompt_signals = signals
 
     # ── Step 12: Cascading audit setup ───────────────────────────────────────
-    # Load adjacency exclusively from regulations.json (no hardcoded fallback).
+    # Adjacency is consulted *after* a regulation actually fails (second-level
+    # cascade further down).  Signals themselves activate their owning rules
+    # via the natural TriggerCondition(prompt_signal == …) match, so no
+    # signal-keyed force-eval is needed here.  Load the map (also used below).
     adjacent_risks = get_adjacent_risks()
 
-    forced_evaluations: set[str] = set()   # Rules to force-evaluate (bypass trigger)
-
-    for sig in signals:
-        # Normal signal: full cascade
-        if sig in adjacent_risks:
-            forced_evaluations.update(adjacent_risks[sig])
+    forced_evaluations: set[str] = set()   # Populated by second-level cascade
 
     # ── Steps 13: Regulatory rule evaluation ─────────────────────────────────
     regulations = get_regulations()
@@ -439,9 +438,6 @@ def evaluate_proposal(
     # ── Map provided evidence ────────────────────────────────────────────────
     evidence_map = {e.evidence_id: e.scrap for e in proposal.provided_evidence}
     provided_ev_ids = {e.evidence_id for e in proposal.provided_evidence if e.value}
-    historical_evidence = client_state.get("historical_evidence", [])
-    if isinstance(historical_evidence, list):
-        provided_ev_ids.update(str(e) for e in historical_evidence)
 
     # ── Process static failures ─────────────────────────────────────────────
     # Static failures are collected as-is.  Evidence curing is handled
