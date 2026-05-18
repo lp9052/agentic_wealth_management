@@ -23,6 +23,7 @@ from typing import Optional
 from app.auditor.models import (
     ConstraintDelta, FailedRuleDetail, TradeProposal, Severity,
     TriggerOperator, KYCOperator, TriggerCondition, KYCRequirement,
+    DERIVATIVE_INSTRUMENT_TYPES,
 )
 from app.auditor.rule_registry import get_regulations
 from app.auditor.risk_scoring import (
@@ -391,11 +392,14 @@ def evaluate_proposal(
     signals = detect_signals(prompt)
 
     # Determine if the trade involves a derivative using both the LLM's structured output
-    # AND the user prompt as a fallback safety net.
+    # AND the user prompt as a fallback safety net.  The instrument_type membership
+    # covers every derivative the proposer can emit (CALL_OPTION, PUT_OPTION, FUTURES,
+    # plus the legacy generic "OPTION"); the prompt-marker scan catches the case where
+    # the LLM tagged it EQUITY but the prompt clearly describes a derivative.
     ticker = proposal.asset_ticker.upper()
     derivative_markers = get_derivative_markers()
     is_derivative = (
-        proposal.instrument_type.upper() == "OPTION" or
+        proposal.instrument_type.upper().strip() in DERIVATIVE_INSTRUMENT_TYPES or
         any(m in prompt.lower() for m in derivative_markers)
     )
 

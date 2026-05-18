@@ -20,7 +20,7 @@ from typing import Optional
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from app.auditor.models import TradeProposal, ProvidedEvidence
+from app.auditor.models import TradeProposal, ProvidedEvidence, INSTRUMENT_TYPES
 from app.proposer.prompts import (
     PROPOSER_SYSTEM_PROMPT,
     PROPOSER_FREEFORM_SYSTEM_PROMPT,
@@ -171,10 +171,11 @@ class TradeProposalSchema(BaseModel):
     instrument_type: str = Field(
         default="EQUITY",
         description=(
-            "The instrument type being traded. Use one of: "
-            "EQUITY, CALL_OPTION, PUT_OPTION, FUTURES, ETF, BOND, OTHER. "
-            "For a plain stock or ETF purchase use EQUITY or ETF. "
-            "For SPY call options use CALL_OPTION."
+            "The instrument type being traded. Use EXACTLY one of: "
+            f"{', '.join(INSTRUMENT_TYPES)}. "
+            "For a plain stock purchase use EQUITY; for an ETF use ETF. "
+            "For SPY call options use CALL_OPTION, for SPY puts use PUT_OPTION, "
+            "for index futures use FUTURES.  Anything else: OTHER."
         )
     )
     trade_size_usd: float = Field(
@@ -218,6 +219,35 @@ class TradeProposalSchema(BaseModel):
     def _normalize_action(cls, v: str) -> str:
         """Accept minor LLM casing variations like 'buy' or 'Buy'."""
         return str(v).strip().upper()
+
+    @field_validator("instrument_type", mode="before")
+    @classmethod
+    def _normalize_instrument_type(cls, v: str) -> str:
+        """
+        Normalize loose LLM variants ('call option', 'Call_Option', 'option',
+        'stock', 'future') to a canonical member of INSTRUMENT_TYPES.  Falling
+        through means the value passes as-is to the auditor, which then trips
+        the unknown-instrument path.
+        """
+        if v is None:
+            return "EQUITY"
+        # Step 1: uppercase, collapse whitespace/hyphens into underscores
+        s = _re.sub(r"[\s\-]+", "_", str(v).strip().upper())
+        if s in INSTRUMENT_TYPES:
+            return s
+        # Step 2: light alias mapping for the most common LLM variants
+        # (kept narrow — anything we don't recognize stays unmapped so we
+        # don't silently coerce a typo into the wrong derivative class).
+        aliases = {
+            "STOCK": "EQUITY", "EQUITIES": "EQUITY", "SHARE": "EQUITY", "SHARES": "EQUITY",
+            "CALL": "CALL_OPTION", "CALLS": "CALL_OPTION", "CALL_OPTIONS": "CALL_OPTION",
+            "PUT": "PUT_OPTION", "PUTS": "PUT_OPTION", "PUT_OPTIONS": "PUT_OPTION",
+            "OPTION": "OPTION", "OPTIONS": "OPTION",   # generic option, kept distinct
+            "FUTURE": "FUTURES", "FUTURE_CONTRACT": "FUTURES", "FUTURES_CONTRACT": "FUTURES",
+            "ETFS": "ETF", "FUND": "ETF",
+            "BONDS": "BOND", "FIXED_INCOME": "BOND",
+        }
+        return aliases.get(s, s)
 
 
 def generate_proposal(
