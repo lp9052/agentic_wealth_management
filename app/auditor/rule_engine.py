@@ -147,8 +147,19 @@ def get_adjacent_risks() -> dict[str, list[str]]:
 # ===========================================================================
 
 VALID_ACTIONS = {"BUY", "SELL", "HOLD", "REVIEW"}
-MAX_SINGLE_TRADE_USD = 10_000_000   # $10 M single-trade ceiling
-CONCENTRATION_LIMIT = 0.50          # Max 50 % of portfolio in one position
+MAX_SINGLE_TRADE_USD = 10_000_000   # $10 M single-trade ceiling (hard CRITICAL — firm-level cap)
+CONCENTRATION_LIMIT = 0.50          # Concentration trigger threshold (51 %+ fires the rule)
+
+# Dynamic-weight band for concentration violations.  Below this floor would let
+# a barely-over violation auto-approve with no evidence, making the 50% policy
+# decorative.  The ceiling (1.0) puts a fully-concentrated single position
+# squarely in HUMAN_ESCALATION even with no evidence.
+#     ω(post_pct) = FLOOR + (CEIL − FLOOR) · overage_fraction
+#       overage_fraction = (post_pct − 0.50) / (1.0 − 0.50)
+# At 51 %: ω ≈ 0.27 → REFINEMENT.  At 75 %: ω ≈ 0.62 → REFINEMENT.
+# At 95 %: ω ≈ 0.93 → ESCALATION.  At 100 %: ω = 1.00 → ESCALATION.
+CONCENTRATION_WEIGHT_FLOOR = 0.25
+CONCENTRATION_WEIGHT_CEIL = 1.00
 
 
 def run_static_checks(
@@ -250,24 +261,37 @@ def run_static_checks(
                 ),
             ))
 
-        # STATIC.05 — Concentration risk
+        # STATIC.05 — Concentration risk (continuous SBC severity)
+        # Instead of a binary 50% knife-edge, the weight scales linearly with
+        # overage: 51% concentration produces a small ω (≈0.27), 100% produces
+        # the maximum (1.0).  Combined with C_ev (the client's ACK) this lets
+        # SBC math fully control the outcome — see CONCENTRATION_WEIGHT_FLOOR/CEIL.
         if total_portfolio > 0 and ticker:
             existing = sum(
                 h.get("value", 0) for h in assets
                 if ticker in h.get("asset", "").upper()
             )
-            # No new cash is being deposited, so denominator is just total_portfolio
             post_pct = (existing + proposal.trade_size_usd) / total_portfolio
             if post_pct > CONCENTRATION_LIMIT:
+                overage_fraction = min(
+                    (post_pct - CONCENTRATION_LIMIT) / (1.0 - CONCENTRATION_LIMIT),
+                    1.0,
+                )
+                dynamic_weight = (
+                    CONCENTRATION_WEIGHT_FLOOR
+                    + (CONCENTRATION_WEIGHT_CEIL - CONCENTRATION_WEIGHT_FLOOR) * overage_fraction
+                )
                 failures.append(FailedRuleDetail(
                     rule_id="STATIC_PORTFOLIO", clause_id="STATIC.05",
                     severity=Severity.RECOVERABLE,
                     description=(
                         f"Concentration risk: post-trade {ticker} position would be "
-                        f"{post_pct:.0%} of the total portfolio value (limit: {CONCENTRATION_LIMIT:.0%})"
+                        f"{post_pct:.0%} of the total portfolio value "
+                        f"(limit: {CONCENTRATION_LIMIT:.0%}, ω={dynamic_weight:.2f})"
                     ),
                     missing_evidence_id="EVID_CONCENTRATION_ACK",
                     is_ack=True,
+                    weight=dynamic_weight,
                 ))
 
     elif action == "SELL" and ticker:

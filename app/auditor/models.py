@@ -108,6 +108,14 @@ class FailedRuleDetail:
     # reply ("yes", "agree", …) is sufficient to cure.  Used by the C_ev
     # fast-path so the auditor doesn't have to recognize ACK evidence by its ID.
     is_ack: bool = False
+    # Per-instance weight override (the SBC ω for this specific violation).
+    # When None, compute_audit_risk falls back to the rule-level constant in
+    # DEFAULT_RULE_WEIGHTS[rule_id].  When set, it lets a single static check
+    # express continuous severity — e.g. concentration at 51% vs 99% can emit
+    # the same FailedRuleDetail with different `weight` values, smoothing the
+    # 50% knife-edge into a gradient under the unified SBC formula:
+    #     R = TSF · (1 − C_ev) · ω
+    weight: Optional[float] = None
 
 
 @dataclass

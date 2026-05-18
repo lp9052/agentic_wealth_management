@@ -98,11 +98,16 @@ def classify_gate_decision(score: float) -> str:
 # ===========================================================================
 
 # λ — Trade size scaling sensitivity.
-# Controls how quickly small trades ramp up risk.
-#   λ=5   → lenient (50% risk at ~14% of equity)
-#   λ=20  → default (50% risk at ~3.5% of equity)
-#   λ=50  → aggressive (50% risk at ~1.4% of equity)
-LAMBDA_TRADE_SIZE_SCALING: float = 20.0
+# Controls how quickly small trades ramp up risk via TSF = 1 − e^(−λ·S_norm).
+#   λ=5   → responsive across 0.5 % – 50 % of portfolio  (50% risk at ~14%)
+#   λ=10  → responsive across 0.5 % – 25 % of portfolio  (50% risk at ~7%)
+#   λ=20  → very strict on tiny trades; saturates by 10%  (50% risk at ~3.5%)
+#
+# We use λ=5 so trade_size remains a live SBC dial across the realistic
+# operating band.  At λ=20 the TSF saturates before 10 % of portfolio,
+# effectively turning trade size into a binary "is this trade visible at
+# all?" signal — undermining SBC's continuous-control design.
+LAMBDA_TRADE_SIZE_SCALING: float = 5.0
 
 # ω — Per-rule institution risk weights.
 # Each rule can have a custom weight reflecting the institution's risk flavor.
@@ -309,7 +314,14 @@ def compute_audit_risk(
     recoverable_count = 0
 
     for rule_id, details in rule_groups.items():
-        omega = get_rule_weight(rule_id)
+        # ω resolution: a FailedRuleDetail may carry a per-instance weight
+        # (dynamic ω — used today only by the concentration check, which
+        # scales weight continuously with overage).  When any detail in the
+        # group sets it, use max() across the group (worst-case violation
+        # defines the rule's risk).  Otherwise fall back to the rule-level
+        # constant in DEFAULT_RULE_WEIGHTS.
+        dynamic_weights = [d.weight for d in details if d.weight is not None]
+        omega = max(dynamic_weights) if dynamic_weights else get_rule_weight(rule_id)
 
         # Determine severity: if ANY detail in this group is CRITICAL, the
         # rule is binary (TSF bypassed).
