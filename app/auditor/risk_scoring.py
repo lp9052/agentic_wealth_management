@@ -112,30 +112,55 @@ def classify_gate_decision(score: float) -> str:
 LAMBDA_TRADE_SIZE_SCALING: float = 5.0
 
 # ω — Per-rule institution risk weights.
+#
 # Each rule has a base weight reflecting institutional risk appetite.
-# FailedRuleDetail.weight can override this per-instance (see concentration).
+# FailedRuleDetail.weight can override this per-instance (see
+# concentration's dynamic weight in rule_engine.py).
+#
+# Calibration principle:
+#   ω = SBC_GATE_ESCALATE + severity_premium
+#   where SBC_GATE_ESCALATE = 0.80 (escalation threshold) and
+#   severity_premium ∈ [0.05, 0.15] for ABSOLUTE rules (bypass_tsf=True)
+#   reflects the regulatory blast radius of the violation.
+#
+# ABSOLUTE band (≥ 0.85, all escalate at TSF=1 in the absence of
+# evidence).  Ordering by severity_premium creates a meaningful gap
+# between criminal exposure (SEC_10b5) and operational failures
+# (STATIC_PORTFOLIO) without changing gate behavior — these matter
+# when multiple absolutes co-fire and the composite needs to reflect
+# the WORST violation, not an average:
+#
+#   premium  rule              consequence                           ω
+#   ─────────────────────────────────────────────────────────────────────
+#   +0.15    SEC_10b5          criminal liability (insider trading)  0.95
+#   +0.10    FINRA_2090        legal + reputational (KYC bypass)     0.90
+#   +0.08    SEC_144           SEC enforcement (restricted stock)    0.88
+#   +0.07    FINRA_3280        registration violation (selling away) 0.87
+#   +0.06    FINRA_3240        FINRA sanction (borrow/lend w/client) 0.86
+#   +0.05    STATIC_PORTFOLIO  operational (funds, AML, KYC status)  0.85
+#
+# GRADED band (< 0.80, TSF applies — small trades naturally auto-approve;
+# evidence cures medium-sized ones).  Ordering reflects how recoverable
+# the violation is with reasonable client engagement:
+#
+#   rule              cure path                                     ω
+#   ─────────────────────────────────────────────────────────────────────
+#   SEC_REG_BI        disclosure can cure (broadest duty)           0.65
+#   FINRA_2111        suitability — evidence can cure               0.60
+#   IRS_WASH_SALE     simple pivot (different ticker / wait 30d)    0.55
 DEFAULT_RULE_WEIGHTS: dict[str, float] = {
-    # Absolute regulations (bypass_tsf=True) — highest institutional risk.
-    # TSF is held at 1.0 so weight IS the minimum score absent evidence.
-    # Weights ≥ 0.85 guarantee they land in the HUMAN_ESCALATION band.
-    "FINRA_2090":       0.90,   # KYC bypass — reputational & legal
-    "SEC_10b5":         0.95,   # Insider trading — criminal liability
-    "SEC_144":          0.85,   # Restricted stock — SEC enforcement
-    "FINRA_3280":       0.85,   # Selling away — FINRA sanctions
-    "FINRA_3240":       0.85,   # Borrowing/lending — FINRA sanctions
-
-    # Static portfolio checks — mixed.  Per-detail bypass_tsf decides
-    # whether trade size discounts the violation (insufficient funds,
-    # KYC, AML, invalid action/ticker, MAX_TRADE → bypass_tsf=True).
-    # Concentration provides its own dynamic weight per-instance, so
-    # this base value only applies to the absolutes in the group.
+    # ABSOLUTE — bypass_tsf=True, always escalate without evidence.
+    "SEC_10b5":         0.95,
+    "FINRA_2090":       0.90,
+    "SEC_144":          0.88,
+    "FINRA_3280":       0.87,
+    "FINRA_3240":       0.86,
     "STATIC_PORTFOLIO": 0.85,
 
-    # Graded regulations — can be mitigated with evidence.
-    # TSF applies, so small trades naturally score low.
-    "FINRA_2111":       0.60,   # Suitability — common, often curable
-    "SEC_REG_BI":       0.65,   # Best interest — disclosure can cure
-    "IRS_WASH_SALE":    0.55,   # Wash sale — pivot can cure
+    # GRADED — TSF applies, evidence-curable.
+    "SEC_REG_BI":       0.65,
+    "FINRA_2111":       0.60,
+    "IRS_WASH_SALE":    0.55,
 }
 
 # Fallback weight for rules not in the config
