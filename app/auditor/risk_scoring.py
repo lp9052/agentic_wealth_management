@@ -269,7 +269,7 @@ def compute_audit_risk(
     iteration: int = 1,
 ) -> SBCRiskScore:
     """
-    Step 2 risk score: Based on full rule evaluation (authoritative).
+    Authoritative composite risk score for the full proposal evaluation.
 
     Violations are GROUPED BY RULE.  Each rule produces ONE risk component:
 

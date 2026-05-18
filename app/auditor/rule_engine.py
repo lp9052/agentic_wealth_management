@@ -1,16 +1,28 @@
 """
 Deterministic Rule Engine — Core of the compliance pipeline.
 
-Pipeline stages handled here:
-  Step 2 : Static portfolio checks   — funds, holdings, AML/KYC, concentration
-  Step 3 : Signal detection          — semantic embeddings vs anchors (imported)
-  Step 4 : Ticker-context tagging    — tag is_derivative & suppress false-positive signals
-  Step 5 : Cascading audit setup     — load adjacency map (force-evaluations are populated
-                                       later, when a regulation actually fails)
-  Step 6 : Regulatory evaluation     — trigger match → KYC gate → collect evidence reqs
-  Step 7 : Evidence scoring          — continuous C_ev via ensemble embedding model
-  Step 8 : Audit risk scoring        — SBC authoritative composite score (TSF)
-  Step 9 : SBC Gate routing          — score-driven: AUTO_APPROVE / REFINEMENT / HUMAN_ESCALATION
+Flow of evaluate_proposal():
+  1. Static portfolio checks      — deterministic arithmetic, fail-fast
+                                    (funds, holdings, AML/KYC, concentration)
+  2. Signal detection             — semantic embeddings vs anchors
+                                    (delegated to signal_detector)
+  3. Derivative classification    — instrument_type membership + prompt markers,
+                                    used to gate per-ticker signal suppression
+  4. Regulatory rule evaluation   — single walk over the regulations AST:
+                                      * harvests evidence_descriptions /
+                                        evidence_is_ack lookup map
+                                      * matches TriggerConditions against the
+                                        proposal + detected signals
+                                      * evaluates KYCRequirements against
+                                        client_state, collects failures
+                                      * second-level cascade via adjacency map
+  5. Evidence coverage (C_ev)     — for each provided evidence scrap, semantic
+                                    similarity vs the canonical description;
+                                    ACK fast-path for affirmative replies
+  6. Composite audit risk         — TSF · (1 − C_ev) · ω, complement-product
+                                    (delegated to risk_scoring)
+  7. SBC gate routing             — score → AUTO_APPROVE / REFINEMENT /
+                                    HUMAN_ESCALATION → ConstraintDelta
 
 No LLM calls. No probabilistic reasoning. Pure logic + semantic math.
 """
@@ -23,6 +35,7 @@ from typing import Optional
 from app.auditor.models import (
     ConstraintDelta, FailedRuleDetail, TradeProposal, Severity,
     TriggerOperator, KYCOperator, TriggerCondition, KYCRequirement,
+    DERIVATIVE_INSTRUMENT_TYPES,
 )
 from app.auditor.rule_registry import get_regulations
 from app.auditor.risk_scoring import (
@@ -41,8 +54,16 @@ _REGULATIONS_PATH = os.path.normpath(
 )
 
 
+# Affirmative replies that satisfy a client-acknowledgment evidence item
+# (used by _score_evidence_coverage's ACK fast-path).  Module-level so we
+# don't reallocate the set on every C_ev iteration.
+AFFIRMATIVE_KEYWORDS: frozenset[str] = frozenset({
+    "yes", "yep", "sure", "understand", "agree", "confirm", "proceed", "acknowledge",
+})
+
+
 # ===========================================================================
-# Step 8a: Ticker Configuration  (loaded once, cached)
+# Ticker Configuration  (loaded once, cached)
 # ===========================================================================
 
 _ticker_config_cache: Optional[dict] = None
@@ -85,7 +106,7 @@ def get_derivative_markers() -> list[str]:
 
 
 # ===========================================================================
-# Step 12a: Adjacency / Cascading Audit  (loaded once from regulations.json)
+# Adjacency / Cascading Audit  (loaded once from regulations.json)
 # ===========================================================================
 
 _adjacent_risks_cache: Optional[dict[str, list[str]]] = None
@@ -122,7 +143,7 @@ def get_adjacent_risks() -> dict[str, list[str]]:
 
 
 # ===========================================================================
-# Step 11: Static Portfolio & Proposal Validation Checks
+# Static Portfolio & Proposal Validation Checks
 # ===========================================================================
 
 VALID_ACTIONS = {"BUY", "SELL", "HOLD", "REVIEW"}
@@ -245,7 +266,8 @@ def run_static_checks(
                         f"Concentration risk: post-trade {ticker} position would be "
                         f"{post_pct:.0%} of the total portfolio value (limit: {CONCENTRATION_LIMIT:.0%})"
                     ),
-                    missing_evidence_id="EVID_CONCENTRATION_ACK"
+                    missing_evidence_id="EVID_CONCENTRATION_ACK",
+                    is_ack=True,
                 ))
 
     elif action == "SELL" and ticker:
@@ -277,7 +299,7 @@ def run_static_checks(
 
 
 # ===========================================================================
-# Step 13: Rule Evaluation Helpers
+# Rule Evaluation Helpers
 # ===========================================================================
 
 def _trigger_matches(condition: TriggerCondition, proposal: TradeProposal) -> bool:
@@ -355,6 +377,46 @@ def _kyc_passes(kyc: KYCRequirement, client_state: dict, is_forced: bool = False
     return True
 
 
+def _score_evidence_coverage(
+    ev_id: str,
+    scrap: str,
+    description: str,
+    prompt: str,
+    is_ack: bool,
+) -> float:
+    """
+    Compute C_ev ∈ [0, 1] for a single provided evidence item.
+
+    Decision order:
+      * empty scrap                        → 0.0
+      * scrap not grounded in user prompt  → 0.0  (warned — possible LLM hallucination)
+      * AST has no description for ev_id   → 1.0  (nothing to compare; provided counts)
+      * is_ack AND scrap is affirmative    → 1.0  (ACK fast-path — "yes" wouldn't
+                                                   embed-match a 20-word legal phrase)
+      * otherwise                          → semantic similarity from the ensemble model
+    """
+    if not scrap:
+        return 0.0
+
+    if scrap.lower() not in prompt.lower():
+        logger.warning("Evidence grounding FAILED for %s: scrap=%r not in prompt", ev_id, scrap)
+        return 0.0
+
+    if not description:
+        return 1.0
+
+    if is_ack and any(k in scrap.lower() for k in AFFIRMATIVE_KEYWORDS):
+        logger.info("Evidence '%s': Fast-path ACK match for scrap=%r", ev_id, scrap)
+        return 1.0
+
+    sim = max(get_embedding_similarity(scrap, description), 0.0)
+    logger.info(
+        "Evidence '%s': C_ev = %.3f (scrap=%r vs desc=%r)",
+        ev_id, sim, scrap[:60], description[:60],
+    )
+    return sim
+
+
 # ===========================================================================
 # Main Evaluation Entry Point
 # ===========================================================================
@@ -366,7 +428,7 @@ def evaluate_proposal(
     iteration: int = 1,
 ) -> tuple[ConstraintDelta, SBCRiskScore]:
     """
-    Run the full 15-step compliance evaluation.
+    Run the full compliance evaluation — see module docstring for the 7-step flow.
 
     Args:
         proposal   : Structured trade proposal from the LLM Proposer.
@@ -382,24 +444,23 @@ def evaluate_proposal(
     trade_size = proposal.trade_size_usd
     total_equity = client_state.get("account_state", {}).get("total_equity_usd", 0.0)
 
-    # ── Step 1: Static portfolio checks (Fail Fast) ──────────────────────────
+    # ── 1. Static portfolio checks (deterministic arithmetic) ────────────────
     static_failures = run_static_checks(proposal, client_state)
 
-    # ── Steps 3–7: Run signal detection (Typo filter is handled upstream) ────
-    # detect_signals calls detect_signals_semantic which runs Steps 1–7.
+    # ── 2. Signal detection (semantic embeddings vs anchors) ─────────────────
     signals = detect_signals(prompt)
 
-    # Determine if the trade involves a derivative using both the LLM's structured output
-    # AND the user prompt as a fallback safety net.
+    # ── 3. Derivative classification + per-ticker signal suppression ─────────
+    # is_derivative gates suppression: blue-chip tickers like SPY suppress
+    # noisy HIGH_RISK_PRODUCT / SPECULATIVE_PRODUCT signals, but a derivative
+    # on the same ticker (e.g. SPY 0DTE calls) is genuinely risky and must
+    # keep those signals.  Two paths cover the proposer's structured field
+    # and a prompt-keyword fallback for cases where the LLM mis-tagged it.
     ticker = proposal.asset_ticker.upper()
-    derivative_markers = get_derivative_markers()
     is_derivative = (
-        proposal.instrument_type.upper() == "OPTION" or
-        any(m in prompt.lower() for m in derivative_markers)
+        proposal.instrument_type.upper().strip() in DERIVATIVE_INSTRUMENT_TYPES
+        or any(m in prompt.lower() for m in get_derivative_markers())
     )
-
-    # ── Step 9: Signal suppression (single unified pass) ─────────────────────
-    # Load per-ticker suppress list from config; apply only when NOT derivative.
     suppress_set = get_suppress_signals_for_ticker(ticker)
     if suppress_set and not is_derivative:
         before = set(signals)
@@ -410,86 +471,62 @@ def evaluate_proposal(
                 "Signal suppression for %s (non-derivative): removed %s",
                 ticker, suppressed,
             )
-
     proposal.prompt_signals = signals
 
-    # ── Step 12: Cascading audit setup ───────────────────────────────────────
-    # Adjacency is consulted *after* a regulation actually fails (second-level
-    # cascade further down).  Signals themselves activate their owning rules
-    # via the natural TriggerCondition(prompt_signal == …) match, so no
-    # signal-keyed force-eval is needed here.  Load the map (also used below).
+    # ── 4. Regulatory rule evaluation (single AST walk) ──────────────────────
+    # One pass does three things at once:
+    #   * harvests the evidence-description / is_ack lookup map used by C_ev
+    #   * matches trigger conditions against the proposal + detected signals
+    #   * evaluates KYC requirements, emitting FailedRuleDetail per violation
+    # STATIC_PORTFOLIO clauses are visited only for their evidence fallbacks
+    # — the checks themselves live in run_static_checks above.  Adjacency
+    # cascades populate forced_evaluations mid-walk; rules later in the
+    # iteration order see them as is_forced=True.
     adjacent_risks = get_adjacent_risks()
-
-    forced_evaluations: set[str] = set()   # Populated by second-level cascade
-
-    # ── Steps 13: Regulatory rule evaluation ─────────────────────────────────
-    regulations = get_regulations()
-
-    # Build a lookup of evidence_id → fallback description text during rule traversal.
-    # This avoids a second iteration of the regulations list later in Step 14.
-    evidence_descriptions: dict[str, str] = {}
-    for reg in regulations:
-        for clause in reg.clauses:
-            for cond in clause.conditions:
-                for kyc in cond.kyc_requirements:
-                    if kyc.fallback:
-                        evidence_descriptions[kyc.fallback.evidence_id] = kyc.fallback.description
-    
-    # ── Map provided evidence ────────────────────────────────────────────────
-    evidence_map = {e.evidence_id: e.scrap for e in proposal.provided_evidence}
-    provided_ev_ids = {e.evidence_id for e in proposal.provided_evidence if e.value}
-
-    # ── Process static failures ─────────────────────────────────────────────
-    # Static failures are collected as-is.  Evidence curing is handled
-    # via the continuous C_ev score in the risk computation — not by
-    # removing failures from the list.
+    forced_evaluations: set[str] = set()
     failed_details: list[FailedRuleDetail] = list(static_failures)
+    all_failed_rules: set[str] = {"STATIC_PORTFOLIO"} if failed_details else set()
+    evidence_descriptions: dict[str, str] = {}
+    evidence_is_ack: dict[str, bool] = {}
 
-    # Extract missing evidence IDs from static failures
-    all_missing_evidence: list[str] = [
-        f.missing_evidence_id for f in failed_details if f.missing_evidence_id
-    ]
-
-    all_failed_rules: set[str] = set()
-
-    if failed_details:
-        all_failed_rules.add("STATIC_PORTFOLIO")
-
-    for reg in regulations:
-        if reg.rule_id == "STATIC_PORTFOLIO":
-            continue  # Already handled in Step 11
-
+    for reg in get_regulations():
+        is_static = (reg.rule_id == "STATIC_PORTFOLIO")
         is_forced = reg.rule_id in forced_evaluations
 
         for clause in reg.clauses:
             for condition in clause.conditions:
+                # Harvest evidence map for every clause (incl. STATIC_PORTFOLIO,
+                # whose EVID_CONCENTRATION_ACK fallback we need below).
+                for kyc in condition.kyc_requirements:
+                    if kyc.fallback:
+                        evidence_descriptions[kyc.fallback.evidence_id] = kyc.fallback.description
+                        evidence_is_ack[kyc.fallback.evidence_id] = kyc.fallback.is_ack
+
+                if is_static:
+                    continue
                 if not (is_forced or _trigger_matches(condition, proposal)):
                     continue
 
                 for kyc in condition.kyc_requirements:
-                    # Force-evals skip intent-based checks (proposal_check domain)
-                    # — those only make sense when triggered by actual user content
+                    # Forced rules skip intent-based checks (proposal_check
+                    # domain) — those only make sense when triggered by actual
+                    # user content, not by adjacency.
                     if is_forced and kyc.domain == "proposal_check":
                         continue
-
                     if _kyc_passes(kyc, client_state, is_forced=is_forced):
                         continue
 
-                    # KYC failed → violation
                     all_failed_rules.add(reg.rule_id)
 
-                    # Second-level cascade
-                    if reg.rule_id in adjacent_risks:
-                        new_cascades = [
-                            r for r in adjacent_risks[reg.rule_id]
-                            if r not in forced_evaluations
-                        ]
+                    # Second-level cascade — adds rules to forced_evaluations
+                    # to be picked up later in this same walk.
+                    new_cascades = [
+                        r for r in adjacent_risks.get(reg.rule_id, [])
+                        if r not in forced_evaluations
+                    ]
+                    if new_cascades:
                         forced_evaluations.update(new_cascades)
-                        if new_cascades:
-                            logger.info(
-                                "Rule '%s' failed → cascading to: %s",
-                                reg.rule_id, new_cascades,
-                            )
+                        logger.info("Rule '%s' failed → cascading to: %s", reg.rule_id, new_cascades)
 
                     if reg.severity == Severity.CRITICAL:
                         failed_details.append(FailedRuleDetail(
@@ -497,89 +534,61 @@ def evaluate_proposal(
                             severity=Severity.CRITICAL,
                             description=f"CRITICAL: {clause.description}",
                         ))
+                    elif kyc.fallback:
+                        failed_details.append(FailedRuleDetail(
+                            rule_id=reg.rule_id, clause_id=clause.clause_id,
+                            severity=Severity.RECOVERABLE,
+                            description=(
+                                f"RECOVERABLE: {clause.description}. "
+                                f"Required: {kyc.fallback.description}"
+                            ),
+                            missing_evidence_id=kyc.fallback.evidence_id,
+                        ))
                     else:
-                        if kyc.fallback:
-                            all_missing_evidence.append(kyc.fallback.evidence_id)
-                            failed_details.append(FailedRuleDetail(
-                                rule_id=reg.rule_id, clause_id=clause.clause_id,
-                                severity=Severity.RECOVERABLE,
-                                description=(
-                                    f"RECOVERABLE: {clause.description}. "
-                                    f"Required: {kyc.fallback.description}"
-                                ),
-                                missing_evidence_id=kyc.fallback.evidence_id,
-                            ))
-                        else:
-                            failed_details.append(FailedRuleDetail(
-                                rule_id=reg.rule_id, clause_id=clause.clause_id,
-                                severity=Severity.RECOVERABLE,
-                                description=f"RECOVERABLE: {clause.description}",
-                            ))
+                        failed_details.append(FailedRuleDetail(
+                            rule_id=reg.rule_id, clause_id=clause.clause_id,
+                            severity=Severity.RECOVERABLE,
+                            description=f"RECOVERABLE: {clause.description}",
+                        ))
 
-    # ── Step 14: Compute continuous evidence scores (C_ev) ───────────────
-    # For each missing evidence item, compute the semantic similarity between
-    # the provided scrap and the evidence fallback description using the
-    # ensemble embedding model.  This produces a continuous C_ev ∈ [0, 1]
-    # instead of a binary provided/not-provided check.
-    #
-    # The evidence_scores dict maps evidence_id → similarity score.
-    # When a rule requires multiple evidence items, compute_audit_risk
-    # uses min(scores) as the rule's C_ev (weakest link).
-    evidence_scores: dict[str, float] = {}
-
-    # Also add static check evidence descriptions not covered by regulations
+    # Static-check evidence proxy: when a static failure references an
+    # evidence_id that the AST doesn't declare, fall back to the failure's
+    # own description for similarity comparison.
     for f in static_failures:
         if f.missing_evidence_id and f.missing_evidence_id not in evidence_descriptions:
-            # Use the failure description as a proxy
             evidence_descriptions[f.missing_evidence_id] = f.description
+            evidence_is_ack[f.missing_evidence_id] = f.is_ack
 
+    # Derived from failed_details — single source of truth, no parallel list.
+    all_missing_evidence = [f.missing_evidence_id for f in failed_details if f.missing_evidence_id]
+
+    # ── 5. Evidence coverage (C_ev) ──────────────────────────────────────────
+    # For each missing-evidence item the proposer claims to have provided,
+    # compute a continuous C_ev ∈ [0, 1].  When a rule has multiple required
+    # evidence items, compute_audit_risk takes min(scores) as the rule's
+    # C_ev (weakest link).
+    evidence_map = {e.evidence_id: e.scrap for e in proposal.provided_evidence}
+    provided_ev_ids = {e.evidence_id for e in proposal.provided_evidence if e.value}
+
+    evidence_scores: dict[str, float] = {}
     for ev_id in set(all_missing_evidence):
-        if ev_id in provided_ev_ids:
-            scrap = evidence_map.get(ev_id, "").strip()
-            if scrap:
-                # Verify scrap is grounded in the user prompt
-                if scrap.lower() in prompt.lower():
-                    # Compute semantic similarity against the evidence description
-                    desc = evidence_descriptions.get(ev_id, "")
-                    if desc:
-                        # Fast-path for explicit user acknowledgments.
-                        # Comparing "yes" to a 20-word legal description yields very low semantic similarity.
-                        affirmative_keywords = {"yes", "yep", "sure", "understand", "agree", "confirm", "proceed", "acknowledge"}
-                        if ev_id.endswith("_ACK") and any(k in scrap.lower() for k in affirmative_keywords):
-                            sim = 1.0
-                            logger.info("Evidence '%s': Fast-path ACK match for scrap=%r", ev_id, scrap)
-                        else:
-                            sim = get_embedding_similarity(scrap, desc)
-                            
-                        evidence_scores[ev_id] = max(sim, 0.0)
-                        if sim != 1.0 or not ev_id.endswith("_ACK"):
-                            logger.info(
-                                "Evidence '%s': C_ev = %.3f (scrap=%r vs desc=%r)",
-                                ev_id, evidence_scores[ev_id],
-                                scrap[:60], desc[:60],
-                            )
-                    else:
-                        # No description to compare against — treat as binary
-                        evidence_scores[ev_id] = 1.0
-                else:
-                    logger.warning(
-                        "Evidence grounding FAILED for %s: scrap=%r not in prompt",
-                        ev_id, scrap,
-                    )
-                    evidence_scores[ev_id] = 0.0
-            else:
-                evidence_scores[ev_id] = 0.0
+        if ev_id not in provided_ev_ids:
+            continue
+        evidence_scores[ev_id] = _score_evidence_coverage(
+            ev_id,
+            scrap=evidence_map.get(ev_id, "").strip(),
+            description=evidence_descriptions.get(ev_id, ""),
+            prompt=prompt,
+            is_ack=evidence_is_ack.get(ev_id, False),
+        )
 
-    # ── Step 15: Audit risk scoring ──────────────────────────────────────────
-    # Build a preliminary delta with all violations (before gate routing).
-    # This is needed by compute_audit_risk to iterate over failed_details.
+    # ── 6. Composite audit risk (TSF · (1 − C_ev) · ω, complement-product) ──
     prelim_delta = ConstraintDelta(
         allow=False,
         failed_rules=sorted(all_failed_rules),
         missing_evidence_ids=all_missing_evidence,
         failed_details=failed_details,
     )
-
     audit_risk = compute_audit_risk(
         prelim_delta, signals,
         trade_size_usd=trade_size,
@@ -588,40 +597,29 @@ def evaluate_proposal(
         iteration=iteration,
     )
 
-    # ── Step 16: SBC Gate routing ────────────────────────────────────────────
-    # The audit_risk score is the SOLE determinant of the routing decision.
-    # No static severity labels — the math decides.
+    # ── 7. SBC gate routing ──────────────────────────────────────────────────
+    # The audit_risk composite score is the SOLE routing input — no static
+    # severity labels.  AUTO_APPROVE hides the failure list (the trade
+    # proceeds, the proposer doesn't need to revise); REFINEMENT and
+    # HUMAN_ESCALATION expose it for the proposer / human reviewer.
     gate = audit_risk.gate_decision
-    score = audit_risk.composite_score
-
-    if gate == "AUTO_APPROVE":
-        delta = ConstraintDelta(
-            allow=True,
-            audit_risk_score=score,
-            gate_decision="AUTO_APPROVE",
-        )
-    elif gate == "HUMAN_ESCALATION":
-        delta = ConstraintDelta(
-            allow=False, severity=Severity.CRITICAL,
-            audit_risk_score=score,
-            gate_decision="HUMAN_ESCALATION",
-            failed_rules=sorted(all_failed_rules),
-            missing_evidence_ids=all_missing_evidence,
-            failed_details=failed_details,
-        )
-    else:  # REFINEMENT
-        delta = ConstraintDelta(
-            allow=False, severity=Severity.RECOVERABLE,
-            audit_risk_score=score,
-            gate_decision="REFINEMENT",
-            failed_rules=sorted(all_failed_rules),
-            missing_evidence_ids=all_missing_evidence,
-            failed_details=failed_details,
-        )
+    allow = (gate == "AUTO_APPROVE")
+    severity = None if allow else (
+        Severity.CRITICAL if gate == "HUMAN_ESCALATION" else Severity.RECOVERABLE
+    )
+    delta = ConstraintDelta(
+        allow=allow,
+        severity=severity,
+        audit_risk_score=audit_risk.composite_score,
+        gate_decision=gate,
+        failed_rules=sorted(all_failed_rules) if not allow else [],
+        missing_evidence_ids=all_missing_evidence if not allow else [],
+        failed_details=failed_details if not allow else [],
+    )
 
     logger.info(
         "SBC Gate: %s (score=%.4f) | TSF: %.4f | Rules: %s | Evidence C_ev: %s",
-        gate, score, audit_risk.trade_size_factor,
+        gate, audit_risk.composite_score, audit_risk.trade_size_factor,
         sorted(all_failed_rules),
         {k: round(v, 3) for k, v in evidence_scores.items()},
     )

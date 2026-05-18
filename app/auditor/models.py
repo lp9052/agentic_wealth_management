@@ -40,6 +40,26 @@ class KYCOperator(str, Enum):
 
 
 # ---------------------------------------------------------------------------
+# Instrument-type vocabulary
+# ---------------------------------------------------------------------------
+# Single source of truth for the proposer schema, the auditor's
+# derivative-detection check, and any future consumers.  Kept here (rather
+# than in proposer/agent.py) so the auditor can import it without depending
+# on the proposer module.
+
+INSTRUMENT_TYPES: tuple[str, ...] = (
+    "EQUITY", "CALL_OPTION", "PUT_OPTION", "FUTURES", "ETF", "BOND", "OTHER",
+)
+
+# Members of INSTRUMENT_TYPES that are derivatives.  "OPTION" is included as
+# a backward-compat alias — older LLM emissions used the generic form before
+# the schema was tightened to CALL_OPTION / PUT_OPTION.
+DERIVATIVE_INSTRUMENT_TYPES: frozenset[str] = frozenset({
+    "CALL_OPTION", "PUT_OPTION", "FUTURES", "OPTION",
+})
+
+
+# ---------------------------------------------------------------------------
 # Proposal & Evidence (LLM output / auditor input)
 # ---------------------------------------------------------------------------
 
@@ -62,7 +82,7 @@ class TradeProposal:
     client_id: str
     action: str                                   # BUY | SELL | HOLD | REVIEW
     asset_ticker: str                             # Underlying symbol ONLY (e.g. SPY)
-    instrument_type: str = "EQUITY"               # EQUITY | CALL_OPTION | PUT_OPTION | FUTURES | ETF | BOND | OTHER
+    instrument_type: str = "EQUITY"               # one of INSTRUMENT_TYPES
     trade_size_usd: float = 0.0
     rationale: str = ""
     user_question: str = ""
@@ -84,6 +104,10 @@ class FailedRuleDetail:
     severity: Severity
     description: str
     missing_evidence_id: Optional[str] = None
+    # True when missing_evidence_id is a user acknowledgment that an affirmative
+    # reply ("yes", "agree", …) is sufficient to cure.  Used by the C_ev
+    # fast-path so the auditor doesn't have to recognize ACK evidence by its ID.
+    is_ack: bool = False
 
 
 @dataclass
@@ -139,6 +163,11 @@ class EvidenceFallback:
     evidence_id: str
     kyc_id: str
     description: str
+    # True when this evidence is a user acknowledgment (e.g. "I accept the
+    # risk").  An affirmative reply qualifies as a perfect-coverage scrap;
+    # the auditor's C_ev step uses this instead of pattern-matching on the
+    # evidence_id naming convention.
+    is_ack: bool = False
 
 
 @dataclass

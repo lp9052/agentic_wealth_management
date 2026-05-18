@@ -1,17 +1,18 @@
 """
-Semantic Signal Detector — Step 3 of the compliance pipeline.
+Semantic Signal Detector — invoked by rule_engine.evaluate_proposal()
+after static checks and before per-ticker suppression.
 
-Pipeline within this module (Step 3a-3d):
-  3a : Text chunker           — sentence-split the globally corrected prompt
-  3b : Ensemble embedding     — fin-mpnet-base + bge-base-financial-matryoshka
-  3c : Embedding sanitization — NaN/inf guard + L2 normalization
-  3d : Blacklist check        — cosine sim vs. signal anchors w/ Z-score threshold
-  3e : Whitelist check        — normal corpus gate: low similarity → NON_STANDARD_REQUEST
-  3f : Return (signal_name, score) pairs sorted by score desc
+Internal flow:
+  * Text chunker           — sentence-split the globally corrected prompt
+  * Ensemble embedding     — fin-mpnet-base + bge-base-financial-matryoshka
+  * Embedding sanitization — NaN/inf guard + L2 normalization
+  * Blacklist check        — cosine sim vs. signal anchors w/ Z-score threshold
+  * Whitelist check        — normal corpus gate: low similarity → NON_STANDARD_REQUEST
+  * Return (signal_name, score) pairs sorted by score desc
 
-Note: We rely on the downstream SBC risk score (Trade Size Factor) to attenuate
-the risk of NON_STANDARD_REQUEST for small trades, so we no longer need complex
-"soft cascade" limiting logic. A single whitelist threshold (0.55) is used.
+The downstream SBC risk score (Trade Size Factor) attenuates the risk of
+NON_STANDARD_REQUEST for small trades, so we don't need any "soft cascade"
+limiting here.  A single whitelist threshold (0.55) is used.
 """
 
 import json
@@ -122,7 +123,7 @@ def _initialize_system():
 
 def _sanitize_embeddings(embs: np.ndarray) -> np.ndarray:
     """
-    Step 4: Ensure embeddings are finite and unit-normalized.
+    Ensure embeddings are finite and unit-normalized.
 
     Handles NaN/inf produced by Apple Silicon MPS acceleration.
     Zero-vectors (all-NaN inputs) are kept as zero rather than dividing by near-zero.
@@ -145,11 +146,11 @@ def detect_signals_semantic(prompt: str) -> list[tuple[str, float]]:
       5. Blacklist check  (per-signal Z-score threshold)
       6. Whitelist check  (vs single WHITELIST_THRESHOLD)
     """
-    # ── Step 1: Initialize Models ─────────────────────────────────────────────
+    # ── Initialize models ────────────────────────────────────────────────────
     _initialize_system()
     model1, model2 = _get_models()
 
-    # ── Step 2: Text chunker ─────────────────────────────────────────────────
+    # ── Text chunker ─────────────────────────────────────────────────────────
     # Split on sentence boundaries; embed the full prompt AND each sentence.
     # This catches violations hidden in subordinate clauses.
     sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", prompt) if s.strip()]
@@ -161,7 +162,7 @@ def detect_signals_semantic(prompt: str) -> list[tuple[str, float]]:
 
     fired_dict: dict[str, float] = {}
 
-    # ── Step 5: Blacklist check ──────────────────────────────────────────────
+    # ── Blacklist check ──────────────────────────────────────────────────────
     # For each signal, compute ensemble cosine similarity vs. all anchor texts.
     # Fire if max similarity across (anchors × chunks) exceeds the Z-score threshold.
     for signal_name, (anchor_m1, anchor_m2) in _anchor_embeddings.items():
@@ -182,7 +183,7 @@ def detect_signals_semantic(prompt: str) -> list[tuple[str, float]]:
             if signal_name not in fired_dict or max_sim > fired_dict[signal_name]:
                 fired_dict[signal_name] = max_sim
 
-    # ── Step 6: Whitelist check ──────────────────────────────────────────────
+    # ── Whitelist check ──────────────────────────────────────────────────────
     # Only run if the blacklist found nothing — "innocent until proven suspicious."
     if not fired_dict:
         n1 = _normal_embeddings[0]
