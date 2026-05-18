@@ -27,9 +27,11 @@ Where:
 
     λ        = Trade size scaling sensitivity (institution-level parameter).
                Controls how quickly trade size ramps up risk contribution.
-               Default: 20. Higher → smaller trades start getting scrutiny.
-               This is the CDF of an exponential distribution — a natural
-               model for "what fraction of the portfolio is at risk."
+               Default: 5 (see LAMBDA_TRADE_SIZE_SCALING below for the
+               operating-band tradeoff).  Higher → smaller trades start
+               getting scrutiny.  This is the CDF of an exponential
+               distribution — a natural model for "what fraction of the
+               portfolio is at risk."
 
     S_norm   = Normalized trade size = trade_size_usd / total_equity_usd.
                Ranges from 0 (tiny trade) to 1+ (leveraged/oversized).
@@ -311,14 +313,24 @@ def compute_audit_risk(
     components = []
 
     for rule_id, details in rule_groups.items():
-        # ω resolution: a FailedRuleDetail may carry a per-instance weight
-        # (dynamic ω — used today only by the concentration check, which
-        # scales weight continuously with overage).  When any detail in the
-        # group sets it, use max() across the group (worst-case violation
-        # defines the rule's risk).  Otherwise fall back to the rule-level
-        # constant in DEFAULT_RULE_WEIGHTS.
-        dynamic_weights = [d.weight for d in details if d.weight is not None]
-        omega = max(dynamic_weights) if dynamic_weights else get_rule_weight(rule_id)
+        # ω resolution: each detail contributes either its per-instance
+        # dynamic weight (used by the concentration check, which fuses the
+        # rule-level weight with the post-trade portfolio percentage) or
+        # the rule-level default from DEFAULT_RULE_WEIGHTS.  Take max across
+        # all details — the worst-case violation in the group sets the
+        # rule's institutional weight.
+        #
+        # IMPORTANT: this is per-detail, NOT "max(dynamic) when any dynamic
+        # exists else rule-level."  A previous version of this code did the
+        # latter, which silently dropped the rule-level weight of every
+        # non-dynamic detail in the group (e.g. insufficient-funds + a
+        # smaller-dynamic-weight concentration got concentration's weight
+        # for both, downgrading insufficient-funds from ESCALATION to
+        # REFINEMENT).
+        omega = max(
+            d.weight if d.weight is not None else get_rule_weight(rule_id)
+            for d in details
+        )
 
         # If ANY detail in this group requests TSF bypass, the rule's TSF is
         # held at 1.0 — trade size doesn't discount this violation.  Used for
@@ -371,8 +383,15 @@ def compute_audit_risk(
     composite = _compute_composite(components)
     gate = classify_gate_decision(composite)
 
-    # Use the non-bypassed TSF for the summary-level trade_size_factor
-    summary_tsf = _compute_trade_size_factor(trade_size_usd, total_equity_usd, bypass=False)
+    # Summary-level TSF for the audit log — "what fraction of portfolio is
+    # this trade?"  Zero equity with a positive trade is conceptually full
+    # saturation (1.0); zero trade is 0.0.  Per-rule TSFs already handle
+    # this implicitly via bypass=True on the upstream insufficient-funds
+    # failure, so this only matters for the audit dict.
+    if total_equity_usd > 0:
+        summary_tsf = _compute_trade_size_factor(trade_size_usd, total_equity_usd, bypass=False)
+    else:
+        summary_tsf = 1.0 if trade_size_usd > 0 else 0.0
 
     return SBCRiskScore(
         composite_score=composite, risk_level=classify_risk(composite),

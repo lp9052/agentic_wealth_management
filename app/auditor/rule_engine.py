@@ -39,7 +39,7 @@ from app.auditor.models import (
 )
 from app.auditor.rule_registry import get_regulations
 from app.auditor.risk_scoring import (
-    compute_audit_risk, SBCRiskScore,
+    compute_audit_risk, SBCRiskScore, get_rule_weight,
 )
 from app.auditor.signal_detector import detect_signals, get_embedding_similarity
 
@@ -147,19 +147,19 @@ def get_adjacent_risks() -> dict[str, list[str]]:
 # ===========================================================================
 
 VALID_ACTIONS = {"BUY", "SELL", "HOLD", "REVIEW"}
-MAX_SINGLE_TRADE_USD = 10_000_000   # $10 M single-trade ceiling (hard CRITICAL — firm-level cap)
+MAX_SINGLE_TRADE_USD = 10_000_000   # $10 M single-trade ceiling (bypass_tsf — firm-level cap)
 CONCENTRATION_LIMIT = 0.50          # Concentration trigger threshold (51 %+ fires the rule)
 
-# Dynamic-weight band for concentration violations.  Below this floor would let
-# a barely-over violation auto-approve with no evidence, making the 50% policy
-# decorative.  The ceiling (1.0) puts a fully-concentrated single position
-# squarely in HUMAN_ESCALATION even with no evidence.
-#     ω(post_pct) = FLOOR + (CEIL − FLOOR) · overage_fraction
-#       overage_fraction = (post_pct − 0.50) / (1.0 − 0.50)
-# At 51 %: ω ≈ 0.27 → REFINEMENT.  At 75 %: ω ≈ 0.62 → REFINEMENT.
-# At 95 %: ω ≈ 0.93 → ESCALATION.  At 100 %: ω = 1.00 → ESCALATION.
-CONCENTRATION_WEIGHT_FLOOR = 0.25
-CONCENTRATION_WEIGHT_CEIL = 1.00
+# Concentration dynamic-weight fusion: linear lerp from the rule-level
+# institutional weight (the floor) to 1.0 (full concentration ceiling).
+#     ω(post_pct) = ω_rule + (1.0 − ω_rule) · overage_fraction
+#       overage_fraction = (post_pct − CONCENTRATION_LIMIT) / (1 − CONCENTRATION_LIMIT)
+# The floor IS the rule weight — no magic constant.  When an institution
+# tightens DEFAULT_RULE_WEIGHTS["STATIC_PORTFOLIO"], the concentration
+# baseline moves with it.  With ω_rule = 0.85 today:
+#   At 51 %: ω ≈ 0.85 → REFINEMENT (TSF<1 keeps R below ESCALATE for most trades).
+#   At 75 %: ω ≈ 0.925 → REFINEMENT / ESCALATION at TSF=1.
+#   At 100 %: ω = 1.00 → ESCALATION at any TSF.
 
 
 def run_static_checks(
@@ -250,8 +250,11 @@ def run_static_checks(
     total_portfolio = acct.get("total_portfolio_value", total_equity)
 
     if action == "BUY":
-        # STATIC.01 — Insufficient funds
-        if total_equity > 0 and proposal.trade_size_usd > total_equity:
+        # STATIC.01 — Insufficient funds.  No `total_equity > 0` guard:
+        # a zero-equity client buying anything positive IS insufficient
+        # funds, and silently skipping the check would let the trade
+        # cascade into a div-by-zero in the TSF math downstream.
+        if proposal.trade_size_usd > total_equity:
             failures.append(FailedRuleDetail(
                 rule_id="STATIC_PORTFOLIO", clause_id="STATIC.01",
                 bypass_tsf=True,
@@ -261,26 +264,31 @@ def run_static_checks(
                 ),
             ))
 
-        # STATIC.05 — Concentration risk (continuous SBC severity)
-        # Instead of a binary 50% knife-edge, the weight scales linearly with
-        # overage: 51% concentration produces a small ω (≈0.27), 100% produces
-        # the maximum (1.0).  Combined with C_ev (the client's ACK) this lets
-        # SBC math fully control the outcome — see CONCENTRATION_WEIGHT_FLOOR/CEIL.
-        if total_portfolio > 0 and ticker:
+        # STATIC.05 — Concentration risk (continuous SBC severity).
+        # Fires when post-trade fraction crosses CONCENTRATION_LIMIT; the
+        # dynamic weight fuses the institutional rule weight (floor) with
+        # the post-trade concentration (lerps toward 1.0 at full
+        # concentration).  See module-level constants for the formula.
+        # Zero-portfolio is treated as full concentration (post_pct=1.0):
+        # any positive trade on nothing IS 100% concentration, and that's
+        # what the math should say.  Insufficient funds also fires and
+        # dominates the composite, but concentration scores correctly too.
+        if ticker:
             existing = sum(
                 h.get("value", 0) for h in assets
                 if ticker in h.get("asset", "").upper()
             )
-            post_pct = (existing + proposal.trade_size_usd) / total_portfolio
+            if total_portfolio > 0:
+                post_pct = (existing + proposal.trade_size_usd) / total_portfolio
+            else:
+                post_pct = 1.0
             if post_pct > CONCENTRATION_LIMIT:
                 overage_fraction = min(
                     (post_pct - CONCENTRATION_LIMIT) / (1.0 - CONCENTRATION_LIMIT),
                     1.0,
                 )
-                dynamic_weight = (
-                    CONCENTRATION_WEIGHT_FLOOR
-                    + (CONCENTRATION_WEIGHT_CEIL - CONCENTRATION_WEIGHT_FLOOR) * overage_fraction
-                )
+                rule_weight = get_rule_weight("STATIC_PORTFOLIO")
+                dynamic_weight = rule_weight + (1.0 - rule_weight) * overage_fraction
                 failures.append(FailedRuleDetail(
                     rule_id="STATIC_PORTFOLIO", clause_id="STATIC.05",
                     description=(
