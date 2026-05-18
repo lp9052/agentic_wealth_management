@@ -149,17 +149,63 @@ LAMBDA_TRADE_SIZE_SCALING: float = 5.0
 #   FINRA_2111        suitability — evidence can cure               0.60
 #   IRS_WASH_SALE     simple pivot (different ticker / wait 30d)    0.55
 DEFAULT_RULE_WEIGHTS: dict[str, float] = {
-    # ABSOLUTE — bypass_tsf=True, always escalate without evidence.
-    "SEC_10b5":         0.95,
-    "FINRA_2090":       0.90,
-    "SEC_144":          0.88,
-    "FINRA_3280":       0.87,
-    "FINRA_3240":       0.86,
-    "STATIC_PORTFOLIO": 0.85,
+    # ── ABSOLUTE band (bypass_tsf=True; always escalate without evidence) ──
 
-    # GRADED — TSF applies, evidence-curable.
+    # Insider trading.  Section 10(b) + Rule 10b-5 carry CRIMINAL
+    # liability for the firm AND the individual broker (fines + prison).
+    # Highest possible severity premium — no other regulatory failure
+    # in this set exposes the firm to criminal prosecution.  Top of band.
+    "SEC_10b5":         0.95,   # +0.15  criminal liability
+
+    # KYC bypass.  Trading without verified Know-Your-Customer is a
+    # legal exposure (AML/BSA) and a reputational hit, but cure path
+    # exists: re-do KYC.  Above the FINRA-3000s because the violation
+    # blocks ALL future activity for the client, not just one trade.
+    "FINRA_2090":       0.90,   # +0.10  legal + reputational
+
+    # Restricted-stock (Rule 144) violations.  SEC enforcement — civil
+    # penalties + disgorgement.  Severity below KYC because it's
+    # ticker-specific (one position, not the whole account) and the
+    # cure is mechanical (wait out the holding period).
+    "SEC_144":          0.88,   # +0.08  SEC civil enforcement
+
+    # Selling away — broker transacting outside their B/D's books.
+    # FINRA registration violation; broker can be barred but firm
+    # exposure is bounded (no client funds at risk if discovered early).
+    "FINRA_3280":       0.87,   # +0.07  registration violation
+
+    # Borrowing/lending arrangements with clients.  FINRA sanction +
+    # fiduciary breach exposure.  Just below 3280 because the underlying
+    # trade is usually legitimate; the structure of the relationship is
+    # what triggers the rule.
+    "FINRA_3240":       0.86,   # +0.06  FINRA sanction
+
+    # Operational failures: insufficient funds, AML/OFAC flag, KYC
+    # status, invalid action/ticker, MAX_TRADE ceiling.  These are
+    # firm-side discipline issues, not regulatory violations in the
+    # external sense.  Floor of the ABSOLUTE band — still escalates at
+    # TSF=1, but contributes the smallest premium to co-fire composites.
+    # (Concentration violations live here too but use a per-instance
+    # dynamic weight that lerps up to 1.0 at full concentration.)
+    "STATIC_PORTFOLIO": 0.85,   # +0.05  operational
+
+    # ── GRADED band (TSF applies; evidence + small trade size cure) ──
+
+    # Best Interest (Reg BI, Form CRS).  Broadest duty in the set —
+    # covers any recommendation to a retail client.  Slightly above
+    # suitability because it's a higher fiduciary standard AND because
+    # the disclosure cure is straightforward (signed acknowledgement).
     "SEC_REG_BI":       0.65,
+
+    # Suitability (FINRA 2111).  Common, often curable with KYC-linked
+    # evidence (risk tolerance, investment objectives).  Standard graded
+    # weight — middle of the band.
     "FINRA_2111":       0.60,
+
+    # Wash sale (IRS).  Tax-loss harvesting violation; consequences are
+    # tax-domain (disallowed loss) not regulatory.  Easiest cure: pivot
+    # to a non-substantially-identical ticker or wait 30 days.  Floor
+    # of the GRADED band.
     "IRS_WASH_SALE":    0.55,
 }
 
