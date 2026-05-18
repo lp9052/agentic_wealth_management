@@ -123,8 +123,9 @@ def _build_rag_context(constraint_delta: dict) -> str:
     if failed_details:
         detail_block = "[Auditor Failure Details — exact reasons for rejection]\n"
         for d in failed_details:
+            tag = "ABSOLUTE" if d.get("bypass_tsf") else "GRADED"
             detail_block += (
-                f"  Rule {d.get('rule_id', '?')} [{d.get('severity', '?')}]: "
+                f"  Rule {d.get('rule_id', '?')} [{tag}]: "
                 f"{d.get('description', '')}\n"
             )
         if missing_evidence:

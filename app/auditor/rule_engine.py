@@ -33,7 +33,7 @@ import os
 from typing import Optional
 
 from app.auditor.models import (
-    ConstraintDelta, FailedRuleDetail, TradeProposal, Severity,
+    ConstraintDelta, FailedRuleDetail, TradeProposal,
     TriggerOperator, KYCOperator, TriggerCondition, KYCRequirement,
     DERIVATIVE_INSTRUMENT_TYPES,
 )
@@ -187,7 +187,7 @@ def run_static_checks(
     if action not in VALID_ACTIONS:
         failures.append(FailedRuleDetail(
             rule_id="STATIC_PORTFOLIO", clause_id="STATIC.00",
-            severity=Severity.CRITICAL,
+            bypass_tsf=True,
             description=f"Invalid action '{proposal.action}'. Must be one of: {VALID_ACTIONS}",
         ))
         return failures
@@ -201,7 +201,7 @@ def run_static_checks(
     if not ticker or ticker == "UNKNOWN" or len(ticker) > 10:
         failures.append(FailedRuleDetail(
             rule_id="STATIC_PORTFOLIO", clause_id="STATIC.00",
-            severity=Severity.CRITICAL,
+            bypass_tsf=True,
             description=f"Invalid or missing ticker symbol: '{proposal.asset_ticker}'",
         ))
 
@@ -209,7 +209,7 @@ def run_static_checks(
     if proposal.trade_size_usd < 0:
         failures.append(FailedRuleDetail(
             rule_id="STATIC_PORTFOLIO", clause_id="STATIC.00",
-            severity=Severity.CRITICAL,
+            bypass_tsf=True,
             description=f"Negative trade size: ${proposal.trade_size_usd:,.2f}",
         ))
 
@@ -217,7 +217,7 @@ def run_static_checks(
     if proposal.trade_size_usd > MAX_SINGLE_TRADE_USD:
         failures.append(FailedRuleDetail(
             rule_id="STATIC_PORTFOLIO", clause_id="STATIC.03",
-            severity=Severity.CRITICAL,
+            bypass_tsf=True,
             description=(
                 f"Trade size ${proposal.trade_size_usd:,.2f} exceeds the single-trade "
                 f"ceiling of ${MAX_SINGLE_TRADE_USD:,.2f}"
@@ -229,13 +229,13 @@ def run_static_checks(
     if not acct.get("kyc_verified", True):
         failures.append(FailedRuleDetail(
             rule_id="STATIC_PORTFOLIO", clause_id="STATIC.04",
-            severity=Severity.CRITICAL,
+            bypass_tsf=True,
             description="Account not KYC-verified. All trading is blocked until verification completes.",
         ))
     if not acct.get("aml_ofac_cleared", True):
         failures.append(FailedRuleDetail(
             rule_id="STATIC_PORTFOLIO", clause_id="STATIC.04",
-            severity=Severity.CRITICAL,
+            bypass_tsf=True,
             description="Account has not passed AML/OFAC screening. All trading is blocked.",
         ))
 
@@ -254,7 +254,7 @@ def run_static_checks(
         if total_equity > 0 and proposal.trade_size_usd > total_equity:
             failures.append(FailedRuleDetail(
                 rule_id="STATIC_PORTFOLIO", clause_id="STATIC.01",
-                severity=Severity.CRITICAL,
+                bypass_tsf=True,
                 description=(
                     f"Insufficient funds: trade requires ${proposal.trade_size_usd:,.2f} "
                     f"but client equity is ${total_equity:,.2f}"
@@ -283,7 +283,6 @@ def run_static_checks(
                 )
                 failures.append(FailedRuleDetail(
                     rule_id="STATIC_PORTFOLIO", clause_id="STATIC.05",
-                    severity=Severity.RECOVERABLE,
                     description=(
                         f"Concentration risk: post-trade {ticker} position would be "
                         f"{post_pct:.0%} of the total portfolio value "
@@ -303,7 +302,7 @@ def run_static_checks(
         if held <= 0:
             failures.append(FailedRuleDetail(
                 rule_id="STATIC_PORTFOLIO", clause_id="STATIC.02",
-                severity=Severity.CRITICAL,
+                bypass_tsf=True,
                 description=(
                     f"Insufficient holdings: client does not hold {ticker} "
                     f"or has zero value in this position"
@@ -312,7 +311,7 @@ def run_static_checks(
         elif proposal.trade_size_usd > held:
             failures.append(FailedRuleDetail(
                 rule_id="STATIC_PORTFOLIO", clause_id="STATIC.02",
-                severity=Severity.CRITICAL,
+                bypass_tsf=True,
                 description=(
                     f"Insufficient holdings: trade requires ${proposal.trade_size_usd:,.2f} "
                     f"but client holds only ${held:,.2f} of {ticker}"
@@ -552,18 +551,17 @@ def evaluate_proposal(
                         forced_evaluations.update(new_cascades)
                         logger.info("Rule '%s' failed → cascading to: %s", reg.rule_id, new_cascades)
 
-                    if reg.severity == Severity.CRITICAL:
+                    if reg.bypass_tsf:
                         failed_details.append(FailedRuleDetail(
                             rule_id=reg.rule_id, clause_id=clause.clause_id,
-                            severity=Severity.CRITICAL,
-                            description=f"CRITICAL: {clause.description}",
+                            bypass_tsf=True,
+                            description=f"ABSOLUTE: {clause.description}",
                         ))
                     elif kyc.fallback:
                         failed_details.append(FailedRuleDetail(
                             rule_id=reg.rule_id, clause_id=clause.clause_id,
-                            severity=Severity.RECOVERABLE,
                             description=(
-                                f"RECOVERABLE: {clause.description}. "
+                                f"GRADED: {clause.description}. "
                                 f"Required: {kyc.fallback.description}"
                             ),
                             missing_evidence_id=kyc.fallback.evidence_id,
@@ -571,8 +569,7 @@ def evaluate_proposal(
                     else:
                         failed_details.append(FailedRuleDetail(
                             rule_id=reg.rule_id, clause_id=clause.clause_id,
-                            severity=Severity.RECOVERABLE,
-                            description=f"RECOVERABLE: {clause.description}",
+                            description=f"GRADED: {clause.description}",
                         ))
 
     # Static-check evidence proxy: when a static failure references an
@@ -622,18 +619,14 @@ def evaluate_proposal(
     )
 
     # ── 7. SBC gate routing ──────────────────────────────────────────────────
-    # The audit_risk composite score is the SOLE routing input — no static
-    # severity labels.  AUTO_APPROVE hides the failure list (the trade
+    # The audit_risk composite score is the SOLE routing input — no parallel
+    # severity taxonomy.  AUTO_APPROVE hides the failure list (the trade
     # proceeds, the proposer doesn't need to revise); REFINEMENT and
     # HUMAN_ESCALATION expose it for the proposer / human reviewer.
     gate = audit_risk.gate_decision
     allow = (gate == "AUTO_APPROVE")
-    severity = None if allow else (
-        Severity.CRITICAL if gate == "HUMAN_ESCALATION" else Severity.RECOVERABLE
-    )
     delta = ConstraintDelta(
         allow=allow,
-        severity=severity,
         audit_risk_score=audit_risk.composite_score,
         gate_decision=gate,
         failed_rules=sorted(all_failed_rules) if not allow else [],

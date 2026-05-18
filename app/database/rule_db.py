@@ -12,7 +12,6 @@ from app.auditor.models import (
     TriggerCondition,
     KYCRequirement,
     EvidenceFallback,
-    Severity,
     TriggerOperator,
     KYCOperator,
 )
@@ -81,7 +80,7 @@ def load_all_regulations(db_path: str = DB_PATH) -> list[Regulation]:
         reg = Regulation(
             rule_id=row["rule_id"],
             rule_name=row["rule_name"],
-            severity=Severity(row["severity"]),
+            bypass_tsf=bool(row["bypass_tsf"]),
             description=row["description"] or "",
             clauses=clause_map.get(row["rule_id"], []),
         )

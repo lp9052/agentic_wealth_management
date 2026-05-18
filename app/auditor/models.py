@@ -15,12 +15,6 @@ from enum import Enum
 from typing import Optional
 
 
-class Severity(str, Enum):
-    """Severity classification for regulatory violations."""
-    CRITICAL = "CRITICAL"
-    RECOVERABLE = "RECOVERABLE"
-
-
 class TriggerOperator(str, Enum):
     """Operators used in trigger condition matching."""
     EQUALS = "=="
@@ -101,7 +95,6 @@ class FailedRuleDetail:
     """Human-readable detail about a single rule failure."""
     rule_id: str
     clause_id: str
-    severity: Severity
     description: str
     missing_evidence_id: Optional[str] = None
     # True when missing_evidence_id is a user acknowledgment that an affirmative
@@ -116,6 +109,14 @@ class FailedRuleDetail:
     # 50% knife-edge into a gradient under the unified SBC formula:
     #     R = TSF · (1 − C_ev) · ω
     weight: Optional[float] = None
+    # True when this rule should NOT be discounted by trade size — i.e. TSF
+    # is held at 1.0 regardless of how small the trade is.  Used for true
+    # absolutes that don't admit a "tiny version" (insufficient funds, KYC
+    # bypass, AML hit, invalid action/ticker, MAX_SINGLE_TRADE_USD cap).
+    # Replaces the legacy Severity.CRITICAL / RECOVERABLE enum: the only
+    # behavioral effect of CRITICAL was bypassing TSF, so we name the flag
+    # after what it actually does.  See risk_scoring.compute_audit_risk.
+    bypass_tsf: bool = False
 
 
 @dataclass
@@ -127,11 +128,8 @@ class ConstraintDelta:
       - gate_decision='AUTO_APPROVE'      (score < 0.20) → trade proceeds
       - gate_decision='REFINEMENT'        (0.20 ≤ score < 0.80) → proposer retries
       - gate_decision='HUMAN_ESCALATION'  (score ≥ 0.80) → hard block, HITL
-
-    The severity field is derived from the gate decision for backward compatibility.
     """
     allow: bool
-    severity: Optional[Severity] = None
     audit_risk_score: float = 0.0
     gate_decision: str = "AUTO_APPROVE"
     failed_rules: list[str] = field(default_factory=list)
@@ -143,7 +141,6 @@ class ConstraintDelta:
         return {
             "allow": self.allow,
             "status": "ALLOW" if self.allow else "REJECT",
-            "severity": self.severity.value if self.severity else None,
             "audit_risk_score": round(self.audit_risk_score, 4),
             "gate_decision": self.gate_decision,
             "failed_rules": self.failed_rules,
@@ -152,7 +149,7 @@ class ConstraintDelta:
                 {
                     "rule_id": d.rule_id,
                     "clause_id": d.clause_id,
-                    "severity": d.severity.value,
+                    "bypass_tsf": d.bypass_tsf,
                     "description": d.description,
                     "missing_evidence_id": d.missing_evidence_id,
                 }
@@ -218,6 +215,6 @@ class Regulation:
     """A top-level regulation containing one or more clauses."""
     rule_id: str
     rule_name: str
-    severity: Severity
+    bypass_tsf: bool
     description: str
     clauses: list[RuleClause] = field(default_factory=list)
