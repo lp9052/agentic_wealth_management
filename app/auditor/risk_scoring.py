@@ -22,8 +22,8 @@ The core risk formula for each triggered rule i:
     R_i = TSF(S_norm) · (1 - C_ev_i) · ω_i
 
 Where:
-    TSF(S_norm) = 1 - e^(-λ · S_norm)   for evidence-based (RECOVERABLE) rules
-    TSF(S_norm) = 1.0                    for binary violations (CRITICAL rules)
+    TSF(S_norm) = 1 - e^(-λ · S_norm)   for graded rules (the default)
+    TSF(S_norm) = 1.0                    when bypass_tsf=True (absolutes)
 
     λ        = Trade size scaling sensitivity (institution-level parameter).
                Controls how quickly trade size ramps up risk contribution.
@@ -64,7 +64,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Optional
 
-from app.auditor.models import ConstraintDelta, Severity, FailedRuleDetail
+from app.auditor.models import ConstraintDelta, FailedRuleDetail
 
 logger = logging.getLogger(__name__)
 
@@ -98,18 +98,23 @@ def classify_gate_decision(score: float) -> str:
 # ===========================================================================
 
 # λ — Trade size scaling sensitivity.
-# Controls how quickly small trades ramp up risk.
-#   λ=5   → lenient (50% risk at ~14% of equity)
-#   λ=20  → default (50% risk at ~3.5% of equity)
-#   λ=50  → aggressive (50% risk at ~1.4% of equity)
-LAMBDA_TRADE_SIZE_SCALING: float = 20.0
+# Controls how quickly small trades ramp up risk via TSF = 1 − e^(−λ·S_norm).
+#   λ=5   → responsive across 0.5 % – 50 % of portfolio  (50% risk at ~14%)
+#   λ=10  → responsive across 0.5 % – 25 % of portfolio  (50% risk at ~7%)
+#   λ=20  → very strict on tiny trades; saturates by 10%  (50% risk at ~3.5%)
+#
+# We use λ=5 so trade_size remains a live SBC dial across the realistic
+# operating band.  At λ=20 the TSF saturates before 10 % of portfolio,
+# effectively turning trade size into a binary "is this trade visible at
+# all?" signal — undermining SBC's continuous-control design.
+LAMBDA_TRADE_SIZE_SCALING: float = 5.0
 
 # ω — Per-rule institution risk weights.
-# Each rule can have a custom weight reflecting the institution's risk flavor.
-# Default weights are based on regulatory severity; institutions can override.
+# Each rule has a base weight reflecting institutional risk appetite.
+# FailedRuleDetail.weight can override this per-instance (see concentration).
 DEFAULT_RULE_WEIGHTS: dict[str, float] = {
-    # Binary / CRITICAL regulations — highest institutional risk
-    # These bypass TSF (always TSF=1.0) so their weight IS the minimum score.
+    # Absolute regulations (bypass_tsf=True) — highest institutional risk.
+    # TSF is held at 1.0 so weight IS the minimum score absent evidence.
     # Weights ≥ 0.85 guarantee they land in the HUMAN_ESCALATION band.
     "FINRA_2090":       0.90,   # KYC bypass — reputational & legal
     "SEC_10b5":         0.95,   # Insider trading — criminal liability
@@ -117,12 +122,15 @@ DEFAULT_RULE_WEIGHTS: dict[str, float] = {
     "FINRA_3280":       0.85,   # Selling away — FINRA sanctions
     "FINRA_3240":       0.85,   # Borrowing/lending — FINRA sanctions
 
-    # Static portfolio checks with CRITICAL severity (AML/KYC) bypass TSF.
-    # The weight must be ≥ SBC_GATE_ESCALATE to guarantee escalation.
-    "STATIC_PORTFOLIO": 0.85,   # KYC/AML/frozen account — binary gate
+    # Static portfolio checks — mixed.  Per-detail bypass_tsf decides
+    # whether trade size discounts the violation (insufficient funds,
+    # KYC, AML, invalid action/ticker, MAX_TRADE → bypass_tsf=True).
+    # Concentration provides its own dynamic weight per-instance, so
+    # this base value only applies to the absolutes in the group.
+    "STATIC_PORTFOLIO": 0.85,
 
-    # RECOVERABLE regulations — can be mitigated with evidence.
-    # These USE TSF scaling, so small trades will naturally score low.
+    # Graded regulations — can be mitigated with evidence.
+    # TSF applies, so small trades naturally score low.
     "FINRA_2111":       0.60,   # Suitability — common, often curable
     "SEC_REG_BI":       0.65,   # Best interest — disclosure can cure
     "IRS_WASH_SALE":    0.55,   # Wash sale — pivot can cure
@@ -145,7 +153,7 @@ def get_rule_weight(rule_id: str) -> float:
 class RuleRiskComponent:
     """Risk contribution from a single rule evaluation."""
     rule_id: str
-    severity: Optional[Severity]
+    bypass_tsf: bool            # True → TSF held at 1.0 for this rule
     raw_score: float            # R_i before clamping
     clamped_score: float        # R_i after clamp to [0, 1]
     trade_size_factor: float    # TSF(S_norm)
@@ -178,8 +186,6 @@ class SBCRiskScore:
     trade_size_factor: float = 0.0
     lambda_param: float = LAMBDA_TRADE_SIZE_SCALING
     signal_count: int = 0
-    critical_count: int = 0
-    recoverable_count: int = 0
     components: list[RuleRiskComponent] = field(default_factory=list)
 
     def to_dict(self) -> dict:
@@ -193,12 +199,10 @@ class SBCRiskScore:
             "trade_size_factor": round(self.trade_size_factor, 4),
             "lambda": self.lambda_param,
             "signal_count": self.signal_count,
-            "critical_count": self.critical_count,
-            "recoverable_count": self.recoverable_count,
             "components": [
                 {
                     "rule_id": c.rule_id,
-                    "severity": c.severity.value if c.severity else None,
+                    "bypass_tsf": c.bypass_tsf,
                     "raw_score": round(c.raw_score, 4),
                     "clamped_score": round(c.clamped_score, 4),
                     "trade_size_factor": round(c.trade_size_factor, 4),
@@ -231,23 +235,23 @@ def _compute_trade_size_factor(
     trade_size_usd: float,
     total_equity_usd: float,
     lam: float = LAMBDA_TRADE_SIZE_SCALING,
-    is_binary: bool = False,
+    bypass: bool = False,
 ) -> float:
     """
     Compute the trade size scaling factor: TSF(S_norm).
 
-    For evidence-based (RECOVERABLE) rules:
+    For graded rules (the default):
         TSF = 1 - e^(-λ · S_norm)
     This is the CDF of an exponential distribution:
         - S_norm → 0: TSF → 0 (negligible trade, negligible risk)
         - S_norm → ∞: TSF → 1 (full portfolio at risk)
 
-    For binary violations (CRITICAL rules):
-        TSF = 1.0 always (trade size is irrelevant for KYC/AML checks)
+    When `bypass=True` (the rule is an absolute — KYC/AML/insufficient funds/…):
+        TSF = 1.0 always (trade size doesn't discount the violation)
 
     S_norm = trade_size / total_equity (capped at 2.0 for sanity).
     """
-    if is_binary:
+    if bypass:
         return 1.0
 
     if total_equity_usd <= 0 or trade_size_usd <= 0:
@@ -305,18 +309,24 @@ def compute_audit_risk(
         rule_groups.setdefault(detail.rule_id, []).append(detail)
 
     components = []
-    critical_count = 0
-    recoverable_count = 0
 
     for rule_id, details in rule_groups.items():
-        omega = get_rule_weight(rule_id)
+        # ω resolution: a FailedRuleDetail may carry a per-instance weight
+        # (dynamic ω — used today only by the concentration check, which
+        # scales weight continuously with overage).  When any detail in the
+        # group sets it, use max() across the group (worst-case violation
+        # defines the rule's risk).  Otherwise fall back to the rule-level
+        # constant in DEFAULT_RULE_WEIGHTS.
+        dynamic_weights = [d.weight for d in details if d.weight is not None]
+        omega = max(dynamic_weights) if dynamic_weights else get_rule_weight(rule_id)
 
-        # Determine severity: if ANY detail in this group is CRITICAL, the
-        # rule is binary (TSF bypassed).
-        has_critical = any(d.severity == Severity.CRITICAL for d in details)
-        is_binary = has_critical
+        # If ANY detail in this group requests TSF bypass, the rule's TSF is
+        # held at 1.0 — trade size doesn't discount this violation.  Used for
+        # absolutes that don't admit a "tiny version" (insufficient funds,
+        # KYC, AML, invalid action/ticker, MAX_TRADE).
+        bypass_tsf = any(d.bypass_tsf for d in details)
         tsf = _compute_trade_size_factor(
-            trade_size_usd, total_equity_usd, is_binary=is_binary
+            trade_size_usd, total_equity_usd, bypass=bypass_tsf
         )
 
         # Compute C_ev: min() across all evidence items for this rule.
@@ -337,18 +347,13 @@ def compute_audit_risk(
         raw = tsf * (1.0 - c_ev) * omega
         clamped = min(max(raw, 0.0), 1.0)
 
-        if has_critical:
-            critical_count += 1
-        else:
-            recoverable_count += 1
-
         # Build description from all details in the group
         descriptions = [d.description for d in details]
         combined_desc = " | ".join(descriptions) if len(descriptions) > 1 else descriptions[0]
 
         components.append(RuleRiskComponent(
             rule_id=rule_id,
-            severity=Severity.CRITICAL if has_critical else Severity.RECOVERABLE,
+            bypass_tsf=bypass_tsf,
             raw_score=raw, clamped_score=clamped,
             trade_size_factor=tsf, evidence_coverage=c_ev,
             omega=omega, description=combined_desc, fired=True,
@@ -363,15 +368,14 @@ def compute_audit_risk(
     composite = _compute_composite(components)
     gate = classify_gate_decision(composite)
 
-    # Use the RECOVERABLE TSF for the summary-level trade_size_factor
-    summary_tsf = _compute_trade_size_factor(trade_size_usd, total_equity_usd, is_binary=False)
+    # Use the non-bypassed TSF for the summary-level trade_size_factor
+    summary_tsf = _compute_trade_size_factor(trade_size_usd, total_equity_usd, bypass=False)
 
     return SBCRiskScore(
         composite_score=composite, risk_level=classify_risk(composite),
         gate_decision=gate,
         step_name="rule_evaluation", iteration=iteration,
         trade_size_factor=summary_tsf, signal_count=len(detected_signals),
-        critical_count=critical_count, recoverable_count=recoverable_count,
         components=components,
     )
 

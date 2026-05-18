@@ -271,12 +271,12 @@ def auditor_node(state: AgentState) -> dict:
     )
     for comp in audit_risk.components:
         audit_entry += (
-            f"  ↳ [{comp.rule_id}|{comp.severity.value if comp.severity else 'SIGNAL'}] "
+            f"  ↳ [{comp.rule_id}|{'ABS' if comp.bypass_tsf else 'GRD'}] "
             f"R={comp.clamped_score:.3f} TSF={comp.trade_size_factor:.4f} "
             f"C_ev={comp.evidence_coverage:.3f} ω={comp.omega}\n"
         )
     for d in delta.failed_details:
-        audit_entry += f"  ↳ [{d.rule_id}|{d.severity.value}] {d.description}\n"
+        audit_entry += f"  ↳ [{d.rule_id}|{'ABS' if d.bypass_tsf else 'GRD'}] {d.description}\n"
     if delta.missing_evidence_ids:
         audit_entry += f"  Missing Evidence: {delta.missing_evidence_ids}\n"
     prev_log = state.get("history_log") or ""

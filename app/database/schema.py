@@ -35,11 +35,26 @@ def init_schema(db_path: str = DB_PATH) -> None:
     # Regulatory Rule Tables (AST)
     # -----------------------------------------------------------------------
 
+    # Idempotent migration: pre-existing rules.db files have a `severity`
+    # column with a CHECK constraint.  Detect the old shape and drop the
+    # whole rule tree in FK order — the seed re-inserts everything anyway,
+    # and CHECK constraints can't be altered in place under SQLite.
+    existing_tables = {row[0] for row in cursor.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'"
+    ).fetchall()}
+    if "regulations" in existing_tables:
+        reg_cols = {row[1] for row in cursor.execute("PRAGMA table_info(regulations)").fetchall()}
+        if "severity" in reg_cols and "bypass_tsf" not in reg_cols:
+            logger.info("regulations: migrating severity → bypass_tsf (drop + reseed required).")
+            for t in ("evidence_fallbacks", "kyc_requirements", "trigger_conditions",
+                     "rule_clauses", "regulations"):
+                cursor.execute(f"DROP TABLE IF EXISTS {t}")
+
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS regulations (
             rule_id TEXT PRIMARY KEY,
             rule_name TEXT NOT NULL,
-            severity TEXT NOT NULL CHECK(severity IN ('CRITICAL', 'RECOVERABLE')),
+            bypass_tsf INTEGER NOT NULL DEFAULT 0,
             description TEXT
         )
     """)
