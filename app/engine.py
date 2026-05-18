@@ -272,7 +272,7 @@ def auditor_node(state: AgentState) -> dict:
     for comp in audit_risk.components:
         audit_entry += (
             f"  ↳ [{comp.rule_id}|{'ABS' if comp.bypass_tsf else 'GRD'}] "
-            f"R={comp.clamped_score:.3f} TSF={comp.trade_size_factor:.4f} "
+            f"R={comp.score:.3f} TSF={comp.trade_size_factor:.4f} "
             f"C_ev={comp.evidence_coverage:.3f} ω={comp.omega}\n"
         )
     for d in delta.failed_details:

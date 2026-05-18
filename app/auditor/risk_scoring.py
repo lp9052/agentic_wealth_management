@@ -154,8 +154,7 @@ class RuleRiskComponent:
     """Risk contribution from a single rule evaluation."""
     rule_id: str
     bypass_tsf: bool            # True → TSF held at 1.0 for this rule
-    raw_score: float            # R_i before clamping
-    clamped_score: float        # R_i after clamp to [0, 1]
+    score: float                # R_i = TSF · (1 − C_ev) · ω  ∈ [0, 1]
     trade_size_factor: float    # TSF(S_norm)
     evidence_coverage: float    # C_ev_i ∈ [0, 1] (semantic similarity)
     omega: float                # ω_i (institution weight)
@@ -203,8 +202,7 @@ class SBCRiskScore:
                 {
                     "rule_id": c.rule_id,
                     "bypass_tsf": c.bypass_tsf,
-                    "raw_score": round(c.raw_score, 4),
-                    "clamped_score": round(c.clamped_score, 4),
+                    "score": round(c.score, 4),
                     "trade_size_factor": round(c.trade_size_factor, 4),
                     "evidence_coverage": round(c.evidence_coverage, 3),
                     "omega": c.omega,
@@ -249,15 +247,17 @@ def _compute_trade_size_factor(
     When `bypass=True` (the rule is an absolute — KYC/AML/insufficient funds/…):
         TSF = 1.0 always (trade size doesn't discount the violation)
 
-    S_norm = trade_size / total_equity (capped at 2.0 for sanity).
+    S_norm = trade_size / total_equity.  No cap — math.exp handles arbitrarily
+    negative inputs without overflow, so large ratios just saturate cleanly to
+    1.0.  total_equity_usd > 0 and trade_size_usd ≥ 0 are invariants enforced
+    by the upstream static checks (insufficient funds and negative-trade-size
+    are CRITICAL with bypass_tsf=True, so they fire before this function is
+    asked to evaluate a graded rule on a degenerate state).
     """
     if bypass:
         return 1.0
 
-    if total_equity_usd <= 0 or trade_size_usd <= 0:
-        return 0.0
-
-    s_norm = min(trade_size_usd / total_equity_usd, 2.0)
+    s_norm = trade_size_usd / total_equity_usd
     return 1.0 - math.exp(-lam * s_norm)
 
 
@@ -343,9 +343,12 @@ def compute_audit_risk(
 
         c_ev = min(per_evidence_scores) if per_evidence_scores else 0.0
 
-        # R_i = TSF · (1 - C_ev) · ω_i
-        raw = tsf * (1.0 - c_ev) * omega
-        clamped = min(max(raw, 0.0), 1.0)
+        # R_i = TSF · (1 - C_ev) · ω_i.  All three factors are independently
+        # bounded to [0, 1] by their construction (TSF via 1 − e^(−λ·S_norm),
+        # C_ev via embedding similarity, ω by DEFAULT_RULE_WEIGHTS + the
+        # per-instance dynamic weight cap), so the product is naturally
+        # in [0, 1] — no clamp needed.
+        score = tsf * (1.0 - c_ev) * omega
 
         # Build description from all details in the group
         descriptions = [d.description for d in details]
@@ -354,7 +357,7 @@ def compute_audit_risk(
         components.append(RuleRiskComponent(
             rule_id=rule_id,
             bypass_tsf=bypass_tsf,
-            raw_score=raw, clamped_score=clamped,
+            score=score,
             trade_size_factor=tsf, evidence_coverage=c_ev,
             omega=omega, description=combined_desc, fired=True,
         ))
@@ -383,14 +386,15 @@ def compute_audit_risk(
 def _compute_composite(components: list[RuleRiskComponent]) -> float:
     """
     Composite risk via complement-product:
-        R = 1 - ∏(1 - R_i_clamped)
-    Clamped to [0.0, 1.0].
+        R = 1 - ∏(1 - R_i)
+    Each R_i is in [0, 1] by construction (see compute_audit_risk), so the
+    complement-product is also in [0, 1] — no clamp needed.
     """
     if not components:
         return 0.0
 
     product = 1.0
     for comp in components:
-        product *= (1.0 - comp.clamped_score)
+        product *= (1.0 - comp.score)
 
-    return round(min(max(1.0 - product, 0.0), 1.0), 4)
+    return round(1.0 - product, 4)
