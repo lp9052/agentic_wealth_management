@@ -48,14 +48,17 @@ def main():
         "prompt": initial_prompt,
         "proposal": "",
         "proposal_json": {},
+        "critique": "",
+        "constraint_delta": {},
         "status": "PENDING",
         "revision_count": 0,
         "supervisor_enabled": True,
         "is_real_time": True,
+        "additional_info": "",
+        "info_injected": False,
         "fired_rules": [],
         "history_log": "",
-        "additional_info": "",
-        "info_injected": False
+        "risk_scores": [],
     }
 
     print("\n⏳ Auditor is evaluating your request...")

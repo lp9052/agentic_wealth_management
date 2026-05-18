@@ -365,38 +365,35 @@ def router_node(state: AgentState) -> str:
 def compliance_router(state: AgentState) -> str:
     """Route after auditor: approve, retry, or block.
 
-    Identical in real-time and unsupervised modes.  REVIEW rounds
-    (proposer asked a question, no trade) always loop through the user
-    node regardless of audit status — the user must answer the question
-    before the trade can proceed.  REFINEMENT also routes through the
-    user node so info can be injected (test) or solicited (real-time)
-    before the next proposer attempt.
+    Identical in real-time and unsupervised modes.  Terminal statuses
+    (CERTIFIED_COMPLIANT, CRITICAL_BLOCK) always END regardless of
+    action type — escalation on a REVIEW round (e.g., INSIDER_TIP in
+    the user's question) must still hard-block the session.
+
+    Non-terminal outcomes route through ``user_simulator_node`` so info
+    can be injected (test) or solicited (real-time) before the next
+    proposer attempt.  user_simulator_node is a no-op when neither
+    applies, and user_simulator_router falls through to proposer_node.
+
+    Note: REVIEW + AUTO_APPROVE was rewritten to NEEDS_REVISION in
+    ``auditor_node`` so that pure question rounds don't terminate
+    before the user has answered.  Only HUMAN_ESCALATION can end a
+    REVIEW round here, which is the intended behavior.
     """
-    proposal_action = state.get("proposal_json", {}).get("action", "")
-
-    # REVIEW: proposer is asking the user something.  The auditor's gate
-    # decision doesn't terminate the session — only the user's reply
-    # (delivered via user_simulator_node) can advance it.
-    if proposal_action == "REVIEW":
-        if state.get("revision_count", 0) >= MAX_ITERATIONS:
-            return END
-        return "user_simulator_node"
-
     status = state.get("status", "")
 
     if status == "CERTIFIED_COMPLIANT":
         return END
     if status == "CRITICAL_BLOCK":
-        return END  # Hard block, no retry
+        return END  # Hard block, no retry — even for REVIEW
 
     # Convergence safety valve: after MAX_ITERATIONS, escalate to human review
     if state.get("revision_count", 0) >= MAX_ITERATIONS:
         return END
 
-    # REFINEMENT for an actual trade — go through the user node so it can
-    # inject test additional_info (unsupervised) or solicit input
-    # (real-time).  user_simulator_node is a no-op when neither applies,
-    # and user_simulator_router falls through to proposer_node.
+    # Non-terminal: route through user node.  Applies uniformly to
+    # REVIEW (proposer asked a question) and REFINEMENT (proposer
+    # proposed a trade that needs revision).
     return "user_simulator_node"
 
 
