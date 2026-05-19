@@ -35,24 +35,30 @@ python3 real_time_runner.py
 # Run the full benchmark (signal detection accuracy + supervised vs unsupervised
 # latency + per-rule catch rate). Writes to performance_report.md.
 python3 test_bench.py
+
+# Run the unit-test suite. pyproject.toml configures pytest with
+# --cov-fail-under=100, so partial runs "fail" on coverage — drop cov flags
+# while iterating on a single test.
+pytest
+pytest tests/test_specific.py --no-cov   # single-file, no coverage gate
 ```
 
-There is no test runner, linter, or CI configured. `test_bench.py` is an end-to-end benchmark, not a unit-test suite — it hits the real Gemini API and takes minutes per run. There is no way to "run a single test"; tweak `num_samples` in `run_tests()` to shrink the run.
+`pyproject.toml` configures **pytest with 100 %-branch-coverage gating** on `app/`; there is no linter and no CI workflow (`.github/` is absent). `tests/` holds the unit suite. `test_bench.py` is an end-to-end benchmark, not a unit-test target — it hits the real Gemini API and takes minutes per run. Shrink it by tweaking `num_samples` in `run_tests()`.
 
-Regenerating fixture data (rarely needed): `scripts/generate_vault.py` produces `data/vault.json`; `scripts/generate_prompts.py` produces `data/attack_prompts.json`.
+Regenerating fixture data (rarely needed): `scripts/generate_vault.py` produces `data/vault.json`; `scripts/generate_prompts.py` produces `data/attack_prompts.json`. `scripts/tune_thresholds.py` sweeps `Z_SCORE_THRESHOLD` / `WHITELIST_THRESHOLD` over the normal corpus + attack prompts and emits a decision matrix for re-calibrating the signal detector.
 
 ## Architecture
 
 ### The SBC loop (`app/engine.py`)
 
-A LangGraph state machine with three nodes — `proposer_node → auditor_node → user_simulator_node` — looping until the gate decides. State is a `TypedDict` (`AgentState`) that carries the prompt, structured proposal, constraint delta, fired rules, per-iteration risk scores, and a human-readable `history_log`.
+A LangGraph state machine with three nodes — `proposer_node → auditor_node → user_simulator_node` — looping until the gate decides. State is a `TypedDict` (`AgentState`) with 16 fields covering inputs (`client_id`, `client_data`, `prompt`), proposer outputs (`proposal`, `proposal_json`), auditor outputs (`critique`, `constraint_delta`, `status`, `fired_rules`, `risk_scores`), loop control (`revision_count`, `supervisor_enabled`, `is_real_time`), the running `history_log`, and the user-simulator handshake (`additional_info`, `info_injected`). Any new field has to land in **all** initial-state dicts (`app/main.py`, `test_bench.py`, `real_time_runner.py`).
 
-Routing is driven by `audit_risk.composite_score`:
+Routing is driven by gate constants `SBC_GATE_AUTO = 0.20` and `SBC_GATE_ESCALATE = 0.80` in `risk_scoring.py`:
 - `< 0.20` → `AUTO_APPROVE` (trade executes, graph ends)
 - `[0.20, 0.80)` → `REFINEMENT` (loop back to proposer with constraint delta)
 - `≥ 0.80` → `HUMAN_ESCALATION` (hard block, graph ends)
 
-`MAX_ITERATIONS = 6` in `engine.py` is the convergence safety valve. **`REVIEW` actions don't count toward the limit** — the proposer is allowed to ask the user clarifying questions without burning revisions. Only `BUY`/`SELL`/`HOLD` proposals consume an iteration.
+`MAX_ITERATIONS = 6` in `engine.py` is the convergence safety valve. **Every round increments `revision_count`** — REVIEW (proposer asking a clarifying question), REFINEMENT, and the initial proposal all count equally. The code comment at the top of `engine.py` claims REVIEW rounds don't count, but the implementation increments `revision_count` unconditionally in `proposer_node`; treat the implementation as the source of truth and budget your conversations accordingly.
 
 The single LLM instance is cached in `_llm` (module global, lazy-initialized) — don't create new `ChatGoogleGenerativeAI` instances per request.
 
@@ -68,16 +74,17 @@ The `TradeProposalSchema.asset_ticker` field has a `_extract_underlying_ticker` 
 
 Pure-logic pipeline, **no LLM calls**. `evaluate_proposal()` in `rule_engine.py` is the entry point.
 
-Pipeline (in order):
+Typo correction happens upstream — `proposer_node` calls `typo_filter.correct_typos` (SymSpell with seeded financial-domain vocabulary) on `state["prompt"]` *before* the prompt ever reaches `evaluate_proposal`, so everything below operates on the corrected text.
 
-1. **Static checks** (`run_static_checks`) — Account/KYC/AML status, invalid action, invalid ticker, negative or oversized trade size, insufficient funds (BUY), insufficient holdings (SELL), >50% concentration (BUY). All emitted as `STATIC_PORTFOLIO` failures.
-2. **Typo filter** (`typo_filter.correct_typos`) — SymSpell with seeded financial-domain vocabulary. Called from `proposer_node` before signal detection, so the corrected prompt flows through the rest of the pipeline.
-3. **Semantic signal detection** (`signal_detector.detect_signals`) — Dual-model ensemble (`mukaj/fin-mpnet-base` + `philschmid/bge-base-financial-matryoshka`) over sentence-chunked input. Per-signal Z-score thresholds are computed at init from the normal-corpus noise floor (`Z_SCORE_THRESHOLD = 2.0`, minimum 0.60). If no blacklist signal fires, a whitelist gate compares against `normal_corpus.json`; below `WHITELIST_THRESHOLD = 0.55` the prompt gets a `NON_STANDARD_REQUEST` flag.
-4. **Per-ticker signal suppression** (`ticker_config.json`) — Whitelisted tickers (SPY, VOO, AAPL, etc.) suppress noisy signals like `HIGH_RISK_PRODUCT` / `SPECULATIVE_PRODUCT`. Suppression is **skipped** when the prompt contains derivative markers (`option`, `call`, `put`, `0dte`, ...) — buying SPY calls is still risky.
-5. **Cascading adjacency** — When a signal fires, related rules from `regulations.json.metadata.related` are force-evaluated even if their own trigger condition didn't match. Second-level cascades fire when those forced rules themselves fail.
-6. **Rule evaluation** — Walks `Regulation → RuleClause → TriggerCondition → KYCRequirement` (loaded once from SQLite via `rule_registry.get_regulations()`). KYC domain `proposal_check` means "intent-based, always fails when triggered"; `portfolio_check` is handled entirely by static checks; everything else looks up fields in the normalized client state.
-7. **Continuous evidence scoring** — For each `missing_evidence_id`, semantic similarity between the LLM-provided `scrap` and the canonical evidence description gives `C_ev ∈ [0, 1]`. The scrap must be grounded in the original prompt (substring match) or `C_ev = 0`. Evidence IDs ending in `_ACK` get a fast-path: any affirmative keyword ("yes", "agree", "acknowledge", ...) scores 1.0.
-8. **Composite risk score** (`risk_scoring.compute_audit_risk`) — Per-rule `R_i = TSF(S_norm) · (1 − C_ev_i) · ω_i`; combined via complement-product `R = 1 − ∏(1 − R_i)`. CRITICAL rules bypass TSF (always 1.0) so trade size doesn't soften them. RECOVERABLE rules use `TSF = 1 − e^(−λ·S_norm)` with `λ = 5` (responsive across the 0.5 %–50 % portfolio band; see `risk_scoring.LAMBDA_TRADE_SIZE_SCALING` for the operating-band rationale). Per-rule weights live in `DEFAULT_RULE_WEIGHTS` — CRITICAL weights are ≥ 0.85 so they always escalate.
+`evaluate_proposal` pipeline (in order):
+
+1. **Static checks** (`run_static_checks`) — Account/KYC/AML status, invalid action, invalid ticker, negative trade size, trade size > $10M ceiling, insufficient funds (BUY), insufficient holdings (SELL), >50% concentration (BUY). All emitted as `STATIC_PORTFOLIO` failures.
+2. **Semantic signal detection** (`signal_detector.detect_signals`) — Dual-model ensemble (`mukaj/fin-mpnet-base` + `philschmid/bge-base-financial-matryoshka`) over sentence-chunked input. Per-signal Z-score thresholds are computed at init from the normal-corpus noise floor (`Z_SCORE_THRESHOLD = 2.0`, minimum 0.60). If no blacklist signal fires, a whitelist gate compares against `normal_corpus.json`; below `WHITELIST_THRESHOLD = 0.55` the prompt gets a `NON_STANDARD_REQUEST` flag.
+3. **Per-ticker signal suppression** (`ticker_config.json`) — Whitelisted tickers (SPY, VOO, AAPL, etc.) suppress noisy signals like `HIGH_RISK_PRODUCT` / `SPECULATIVE_PRODUCT`. Suppression is **skipped** when the proposal's `instrument_type` is a derivative type OR the prompt contains derivative markers (`option`, `call`, `put`, `strike`, `expir`, `0dte`, `leveraged`, `inverse`, `3x`/`2x`/`1x`, `contract`, `collar`, `hedge`, `short`) — buying SPY calls is still risky.
+4. **Cascading adjacency** — When a signal fires, related rules from `regulations.json.metadata.related` are force-evaluated even if their own trigger condition didn't match. Second-level cascades fire when those forced rules themselves fail.
+5. **Rule evaluation** — Walks `Regulation → RuleClause → TriggerCondition → KYCRequirement` (loaded once from SQLite via `rule_registry.get_regulations()`). KYC domain `proposal_check` means "intent-based, always fails when triggered"; `portfolio_check` is handled entirely by static checks; everything else looks up fields in the normalized client state.
+6. **Continuous evidence scoring** — For each `missing_evidence_id`, semantic similarity between the LLM-provided `scrap` and the canonical evidence description gives `C_ev ∈ [0, 1]`. The scrap must be grounded in the original prompt (substring match) or `C_ev = 0`. Evidence IDs ending in `_ACK` get a fast-path: any affirmative keyword ("yes", "agree", "acknowledge", ...) scores 1.0.
+7. **Composite risk score** (`risk_scoring.compute_audit_risk`) — Per-rule `R_i = TSF(S_norm) · (1 − C_ev_i) · ω_i`; combined via complement-product `R = 1 − ∏(1 − R_i)`. CRITICAL rules bypass TSF (always 1.0) so trade size doesn't soften them. RECOVERABLE rules use `TSF = 1 − e^(−λ·S_norm)` with `λ = 5` (responsive across the 0.5 %–50 % portfolio band; see `risk_scoring.LAMBDA_TRADE_SIZE_SCALING` for the operating-band rationale). Per-rule weights live in `DEFAULT_RULE_WEIGHTS` — CRITICAL weights are ≥ 0.85 so they always escalate.
 
 ### Data layer (`app/database/`, `data/`)
 
@@ -98,7 +105,7 @@ Pipeline (in order):
 - **No silent fallbacks for missing config.** Missing `ticker_config.json` or `regulations.json` crashes loudly — these are deployment errors, not runtime conditions. Don't add try/except wrappers around their loads.
 - **Pure dataclasses for auditor models, Pydantic for LLM I/O.** `app/auditor/models.py` is plain `@dataclass` (mutable, fast, no validation overhead). The Proposer's input/output uses Pydantic (`TradeProposalSchema`) so it can drive Gemini's structured-output API.
 - **Ticker validator is load-bearing.** The regex-based extractor in `TradeProposalSchema._extract_underlying_ticker` prevents the LLM's "SPY call options" outputs from getting blocked as invalid tickers. If you change it, also update `instrument_type` handling in `auditor_node` and the derivative-marker check in `evaluate_proposal`.
-- **`REVIEW` ≠ violation.** When the proposer can't proceed without more info from the user, it emits `action="REVIEW"` with a question in `user_question`. The auditor still records a score (for the audit trail) but the loop is allowed to continue without consuming an iteration. Real-time mode (`is_real_time=True`) skips the auditor entirely for REVIEW rounds to avoid double-printing identical scores.
+- **`REVIEW` ≠ violation, but it still gets audited.** When the proposer can't proceed without more info from the user, it emits `action="REVIEW"` with a question in `user_question`. The auditor *always* runs (the router never skips it — `router_node` always returns `auditor_node`), records a score for the audit trail, and `auditor_node` then **rewrites `CERTIFIED_COMPLIANT` → `NEEDS_REVISION` on REVIEW rounds** so a clean question doesn't terminate the session before the user has answered. `HUMAN_ESCALATION` on a REVIEW round (e.g., the user's question contains an `INSIDER_TIP` signal) still hard-blocks. In real-time mode (`is_real_time=True`) the auditor additionally prints the critique to the terminal.
 - **CRITICAL rule weights ≥ `SBC_GATE_ESCALATE`.** Don't lower weights for CRITICAL rules in `DEFAULT_RULE_WEIGHTS` below 0.80 — they must always trip the human-escalation gate. Same for `STATIC_PORTFOLIO` when it carries CRITICAL failures.
 - **One LLM, one shared instance.** `engine._get_llm()` caches the proposer LLM at module level. Don't instantiate `ChatGoogleGenerativeAI` per node call.
 - **`fired_rules` filtering in test_bench.** `test_bench.py` strips `STATIC_PORTFOLIO` from `fired_rules` when computing rule-category catch rates — it's noise for benchmarking regulatory detection, but a real failure for end users. Keep them in the audit trail; only filter in metrics aggregation.
