@@ -1,4 +1,10 @@
-"""Tests for app/database/client_db.py — vault loader + normalizer."""
+"""Tests for app/database/client_db.py — public surface only.
+
+Public API: get_client_data, get_client_state, sync_vault_to_db.
+
+The private _load_vault (file read + cache) and _empty_state (empty-state
+factory) are exercised through get_client_data / get_client_state.
+"""
 
 import json
 
@@ -6,7 +12,6 @@ import pytest
 
 from app.database import client_db
 from app.database.client_db import (
-    _empty_state,
     get_client_data,
     get_client_state,
     sync_vault_to_db,
@@ -89,13 +94,6 @@ def test_get_client_state_empty_holdings_falls_back_to_account(vault_path):
     })
     # total_portfolio_value falls back to total_account_value when holdings sum is 0
     assert state["account_state"]["total_portfolio_value"] == 1234.0
-
-
-def test_empty_state_shape():
-    s = _empty_state()
-    assert s["profile"]["age"] == 40
-    assert s["holdings"]["assets"] == []
-    assert s["account_state"]["total_equity_usd"] == 0.0
 
 
 def test_sync_vault_to_db(vault_path, seeded_db, monkeypatch):

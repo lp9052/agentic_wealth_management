@@ -257,6 +257,179 @@ def _seed_minimal_db(db_path: str) -> None:
     c.execute("INSERT INTO kyc_requirements VALUES (?, ?, ?, ?, ?, ?)",
               ("WASH.01.K1", "WASH.01.T1", "missing_field", "==", "True", "profile"))
 
+    # OP_COVERAGE — synthetic rule used to exercise every KYCOperator branch
+    # and every _trigger_matches branch through evaluate_proposal.  Each
+    # clause isolates one operator path; tests fire individual signals to
+    # activate the clause they care about without touching the others.
+    c.execute("INSERT INTO regulations VALUES (?, ?, ?, ?)",
+              ("OP_COVERAGE", "Operator Coverage", 0, "Branch coverage rule"))
+
+    # K-bool-EQ:  threshold=True, op===   profile.kyc_verified
+    c.execute("INSERT INTO rule_clauses VALUES (?, ?, ?)",
+              ("OP.bool_eq", "OP_COVERAGE", "bool EQUALS"))
+    c.execute("INSERT INTO trigger_conditions VALUES (?, ?, ?, ?, ?)",
+              ("OP.bool_eq.T", "OP.bool_eq", "prompt_signal", "CONTAINS", "SIG_BOOL_EQ"))
+    c.execute("INSERT INTO kyc_requirements VALUES (?, ?, ?, ?, ?, ?)",
+              ("OP.bool_eq.K", "OP.bool_eq.T", "kyc_verified", "==", "True", "profile"))
+
+    # K-bool-NEQ:  threshold=False, op=!=
+    c.execute("INSERT INTO rule_clauses VALUES (?, ?, ?)",
+              ("OP.bool_neq", "OP_COVERAGE", "bool NOT_EQUALS"))
+    c.execute("INSERT INTO trigger_conditions VALUES (?, ?, ?, ?, ?)",
+              ("OP.bool_neq.T", "OP.bool_neq", "prompt_signal", "CONTAINS", "SIG_BOOL_NEQ"))
+    c.execute("INSERT INTO kyc_requirements VALUES (?, ?, ?, ?, ?, ?)",
+              ("OP.bool_neq.K", "OP.bool_neq.T", "kyc_verified", "!=", "False", "profile"))
+
+    # K-num-LT
+    c.execute("INSERT INTO rule_clauses VALUES (?, ?, ?)",
+              ("OP.num_lt", "OP_COVERAGE", "num LESS_THAN"))
+    c.execute("INSERT INTO trigger_conditions VALUES (?, ?, ?, ?, ?)",
+              ("OP.num_lt.T", "OP.num_lt", "prompt_signal", "CONTAINS", "SIG_NUM_LT"))
+    c.execute("INSERT INTO kyc_requirements VALUES (?, ?, ?, ?, ?, ?)",
+              ("OP.num_lt.K", "OP.num_lt.T", "age", "<", "30", "profile"))
+
+    # K-num-EQ
+    c.execute("INSERT INTO rule_clauses VALUES (?, ?, ?)",
+              ("OP.num_eq", "OP_COVERAGE", "num EQUALS"))
+    c.execute("INSERT INTO trigger_conditions VALUES (?, ?, ?, ?, ?)",
+              ("OP.num_eq.T", "OP.num_eq", "prompt_signal", "CONTAINS", "SIG_NUM_EQ"))
+    c.execute("INSERT INTO kyc_requirements VALUES (?, ?, ?, ?, ?, ?)",
+              ("OP.num_eq.K", "OP.num_eq.T", "age", "==", "40", "profile"))
+
+    # K-num-NEQ
+    c.execute("INSERT INTO rule_clauses VALUES (?, ?, ?)",
+              ("OP.num_neq", "OP_COVERAGE", "num NOT_EQUALS"))
+    c.execute("INSERT INTO trigger_conditions VALUES (?, ?, ?, ?, ?)",
+              ("OP.num_neq.T", "OP.num_neq", "prompt_signal", "CONTAINS", "SIG_NUM_NEQ"))
+    c.execute("INSERT INTO kyc_requirements VALUES (?, ?, ?, ?, ?, ?)",
+              ("OP.num_neq.K", "OP.num_neq.T", "age", "!=", "40", "profile"))
+
+    # K-str-EQ  (already covered by FINRA_2111 risk_tolerance==Aggressive,
+    # but kept here for symmetry — different signal name keeps it isolated)
+    c.execute("INSERT INTO rule_clauses VALUES (?, ?, ?)",
+              ("OP.str_eq", "OP_COVERAGE", "str EQUALS"))
+    c.execute("INSERT INTO trigger_conditions VALUES (?, ?, ?, ?, ?)",
+              ("OP.str_eq.T", "OP.str_eq", "prompt_signal", "CONTAINS", "SIG_STR_EQ"))
+    c.execute("INSERT INTO kyc_requirements VALUES (?, ?, ?, ?, ?, ?)",
+              ("OP.str_eq.K", "OP.str_eq.T", "archetype", "==", "WHALE", "profile"))
+
+    # K-str-NEQ
+    c.execute("INSERT INTO rule_clauses VALUES (?, ?, ?)",
+              ("OP.str_neq", "OP_COVERAGE", "str NOT_EQUALS"))
+    c.execute("INSERT INTO trigger_conditions VALUES (?, ?, ?, ?, ?)",
+              ("OP.str_neq.T", "OP.str_neq", "prompt_signal", "CONTAINS", "SIG_STR_NEQ"))
+    c.execute("INSERT INTO kyc_requirements VALUES (?, ?, ?, ?, ?, ?)",
+              ("OP.str_neq.K", "OP.str_neq.T", "archetype", "!=", "NORMAL", "profile"))
+
+    # K-str-NOT_CONTAINS
+    c.execute("INSERT INTO rule_clauses VALUES (?, ?, ?)",
+              ("OP.str_nc", "OP_COVERAGE", "str NOT_CONTAINS"))
+    c.execute("INSERT INTO trigger_conditions VALUES (?, ?, ?, ?, ?)",
+              ("OP.str_nc.T", "OP.str_nc", "prompt_signal", "CONTAINS", "SIG_STR_NC"))
+    c.execute("INSERT INTO kyc_requirements VALUES (?, ?, ?, ?, ?, ?)",
+              ("OP.str_nc.K", "OP.str_nc.T", "compliance_history", "NOT_CONTAINS",
+               "violation", "profile"))
+
+    # K-SEMANTIC_SIMILAR  (signal_detector.get_embedding_similarity is the
+    # similarity function; tests monkeypatch its score to a known value).
+    c.execute("INSERT INTO rule_clauses VALUES (?, ?, ?)",
+              ("OP.sem", "OP_COVERAGE", "SEMANTIC_SIMILAR"))
+    c.execute("INSERT INTO trigger_conditions VALUES (?, ?, ?, ?, ?)",
+              ("OP.sem.T", "OP.sem", "prompt_signal", "CONTAINS", "SIG_SEM"))
+    c.execute("INSERT INTO kyc_requirements VALUES (?, ?, ?, ?, ?, ?)",
+              ("OP.sem.K", "OP.sem.T", "compliance_history",
+               "SEMANTIC_SIMILAR", "Clean record.", "profile"))
+
+    # K-numeric-with-NOT_CONTAINS  (falls through bool/numeric to the string
+    # comparator at the bottom of _kyc_passes).  archetype is a string field
+    # but threshold "0" parses as numeric — exercises the bool→numeric→string
+    # fall-through.  Actually: threshold "0" matches the bool guard first.
+    # Use NOT_CONTAINS with a numeric value + non-numeric threshold to force
+    # the string fall-through.
+    c.execute("INSERT INTO rule_clauses VALUES (?, ?, ?)",
+              ("OP.num_str_nc", "OP_COVERAGE", "numeric value NOT_CONTAINS string"))
+    c.execute("INSERT INTO trigger_conditions VALUES (?, ?, ?, ?, ?)",
+              ("OP.num_str_nc.T", "OP.num_str_nc", "prompt_signal", "CONTAINS",
+               "SIG_NUM_STR_NC"))
+    c.execute("INSERT INTO kyc_requirements VALUES (?, ?, ?, ?, ?, ?)",
+              ("OP.num_str_nc.K", "OP.num_str_nc.T", "age", "NOT_CONTAINS",
+               "42", "profile"))
+
+    # Trigger field outside (prompt_signal, proposal.action) — exercises the
+    # `return False` fallthrough in _trigger_matches.
+    c.execute("INSERT INTO rule_clauses VALUES (?, ?, ?)",
+              ("OP.unknown_field", "OP_COVERAGE", "unknown trigger_field"))
+    c.execute("INSERT INTO trigger_conditions VALUES (?, ?, ?, ?, ?)",
+              ("OP.unknown_field.T", "OP.unknown_field", "proposal.asset_ticker",
+               "==", "ANY"))
+    c.execute("INSERT INTO kyc_requirements VALUES (?, ?, ?, ?, ?, ?)",
+              ("OP.unknown_field.K", "OP.unknown_field.T", "age", ">", "0", "profile"))
+
+    # prompt_signal with EXISTS operator — exercises the inner `return False`
+    # when operator isn't CONTAINS/EQUALS.
+    c.execute("INSERT INTO rule_clauses VALUES (?, ?, ?)",
+              ("OP.sig_exists", "OP_COVERAGE", "prompt_signal EXISTS"))
+    c.execute("INSERT INTO trigger_conditions VALUES (?, ?, ?, ?, ?)",
+              ("OP.sig_exists.T", "OP.sig_exists", "prompt_signal", "EXISTS", "X"))
+    c.execute("INSERT INTO kyc_requirements VALUES (?, ?, ?, ?, ?, ?)",
+              ("OP.sig_exists.K", "OP.sig_exists.T", "age", ">", "0", "profile"))
+
+    # proposal.action with CONTAINS operator — exercises action-side `return False`.
+    c.execute("INSERT INTO rule_clauses VALUES (?, ?, ?)",
+              ("OP.act_contains", "OP_COVERAGE", "proposal.action CONTAINS"))
+    c.execute("INSERT INTO trigger_conditions VALUES (?, ?, ?, ?, ?)",
+              ("OP.act_contains.T", "OP.act_contains", "proposal.action",
+               "CONTAINS", "BUY"))
+    c.execute("INSERT INTO kyc_requirements VALUES (?, ?, ?, ?, ?, ?)",
+              ("OP.act_contains.K", "OP.act_contains.T", "age", ">", "0", "profile"))
+
+    # Missing-field KYC, signal-triggered.  Used by tests to exercise both
+    # `is_forced=True → return True` (when cascaded) and the default `return
+    # False` (when triggered directly).
+    c.execute("INSERT INTO rule_clauses VALUES (?, ?, ?)",
+              ("OP.missing_field", "OP_COVERAGE", "missing client field"))
+    c.execute("INSERT INTO trigger_conditions VALUES (?, ?, ?, ?, ?)",
+              ("OP.missing_field.T", "OP.missing_field", "prompt_signal",
+               "CONTAINS", "SIG_MISSING"))
+    c.execute("INSERT INTO kyc_requirements VALUES (?, ?, ?, ?, ?, ?)",
+              ("OP.missing_field.K", "OP.missing_field.T", "nonexistent_field",
+               "==", "anything", "profile"))
+
+    # Trigger field=proposal.action with EQUALS operator on a non-static rule.
+    # STATIC.05 uses this combination but the static block is skipped in the
+    # AST walk, so we need a non-static rule to reach line 365.
+    c.execute("INSERT INTO rule_clauses VALUES (?, ?, ?)",
+              ("OP.act_eq", "OP_COVERAGE", "proposal.action EQUALS"))
+    c.execute("INSERT INTO trigger_conditions VALUES (?, ?, ?, ?, ?)",
+              ("OP.act_eq.T", "OP.act_eq", "proposal.action", "==", "BUY"))
+    c.execute("INSERT INTO kyc_requirements VALUES (?, ?, ?, ?, ?, ?)",
+              ("OP.act_eq.K", "OP.act_eq.T", "age", ">", "0", "profile"))
+
+    # KYC with portfolio_check domain on a non-static rule (the static rule
+    # has one too but is skipped in the AST walk via `if is_static: continue`).
+    c.execute("INSERT INTO rule_clauses VALUES (?, ?, ?)",
+              ("OP.portfolio_check", "OP_COVERAGE", "portfolio_check KYC"))
+    c.execute("INSERT INTO trigger_conditions VALUES (?, ?, ?, ?, ?)",
+              ("OP.portfolio_check.T", "OP.portfolio_check", "prompt_signal",
+               "CONTAINS", "SIG_PORTFOLIO"))
+    c.execute("INSERT INTO kyc_requirements VALUES (?, ?, ?, ?, ?, ?)",
+              ("OP.portfolio_check.K", "OP.portfolio_check.T", "any", "==",
+               "any", "portfolio_check"))
+
+    # Evidence fallback with an empty description — exercises the
+    # `if not description: return 1.0` short-circuit in _score_evidence_coverage.
+    c.execute("INSERT INTO rule_clauses VALUES (?, ?, ?)",
+              ("OP.empty_desc", "OP_COVERAGE", "evidence with empty description"))
+    c.execute("INSERT INTO trigger_conditions VALUES (?, ?, ?, ?, ?)",
+              ("OP.empty_desc.T", "OP.empty_desc", "prompt_signal",
+               "CONTAINS", "SIG_EMPTY_DESC"))
+    c.execute("INSERT INTO kyc_requirements VALUES (?, ?, ?, ?, ?, ?)",
+              ("OP.empty_desc.K", "OP.empty_desc.T", "nonexistent_field",
+               "==", "x", "profile"))
+    c.execute("INSERT INTO evidence_fallbacks (evidence_id, kyc_id, description, is_ack) "
+              "VALUES (?, ?, ?, ?)",
+              ("EVID_EMPTY_DESC", "OP.empty_desc.K", "", 0))
+
     # STATIC_PORTFOLIO — required so the engine can harvest the
     # EVID_CONCENTRATION_ACK description from the AST.
     c.execute("INSERT INTO regulations VALUES (?, ?, ?, ?)",

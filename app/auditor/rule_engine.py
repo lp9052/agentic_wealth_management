@@ -427,7 +427,13 @@ def _kyc_passes(kyc: KYCRequirement, client_state: dict, is_forced: bool = False
         from app.auditor.signal_detector import get_embedding_similarity as _sim
         return _sim(str_v, threshold) >= 0.60
 
-    return True
+    # Defensive default: every KYCOperator member is handled above.  This
+    # return is only reachable if a future enum extension adds an operator
+    # we haven't taught the engine about — in which case "pass" is the
+    # least-surprising fallback.  rule_db.load_all_regulations coerces the
+    # column via KYCOperator(...) before we get here, so the AST can't carry
+    # a string outside the enum.
+    return True  # pragma: no cover
 
 
 def _score_evidence_coverage(
