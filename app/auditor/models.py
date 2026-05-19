@@ -65,6 +65,16 @@ class ProvidedEvidence:
     scrap: str = ""
     evidence_path: str = ""
 
+    @classmethod
+    def from_dict(cls, data: dict) -> "ProvidedEvidence":
+        """Rehydrate from the JSON-serialised form carried in AgentState."""
+        return cls(
+            evidence_id=data.get("evidence_id", ""),
+            value=data.get("value", False),
+            scrap=data.get("scrap", ""),
+            evidence_path=data.get("evidence_path", ""),
+        )
+
 
 @dataclass
 class TradeProposal:
@@ -84,6 +94,32 @@ class TradeProposal:
 
     # Enriched signal flags (set by the signal detector, not the LLM)
     prompt_signals: list[str] = field(default_factory=list)
+
+    @classmethod
+    def from_proposal_json(cls, data: dict, client_id: str) -> "TradeProposal":
+        """
+        Rehydrate a TradeProposal from the JSON-serialised form carried in
+        AgentState (``proposal_json``).  LangGraph state must be JSON-friendly,
+        so the proposer serialises into a dict and the auditor reconstructs.
+
+        ``client_id`` is taken from AgentState rather than the inner dict so
+        the state's notion of the active client wins on any mismatch.
+        ``instrument_type`` defaults to "EQUITY" (the Pydantic validator on
+        the proposer side already guarantees a non-empty canonical value, but
+        this also covers hand-built state dicts in tests / direct API calls).
+        """
+        return cls(
+            proposal_id=data.get("proposal_id", ""),
+            client_id=client_id,
+            action=data.get("action", "REVIEW"),
+            asset_ticker=data.get("asset_ticker", ""),
+            instrument_type=data.get("instrument_type") or "EQUITY",
+            trade_size_usd=data.get("trade_size_usd", 0.0),
+            rationale=data.get("rationale", ""),
+            provided_evidence=[
+                ProvidedEvidence.from_dict(e) for e in data.get("provided_evidence", [])
+            ],
+        )
 
 
 # ---------------------------------------------------------------------------

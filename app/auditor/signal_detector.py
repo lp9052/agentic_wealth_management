@@ -189,7 +189,11 @@ def detect_signals_semantic(prompt: str) -> list[tuple[str, float]]:
             threshold = 1.0
 
         if max_sim >= threshold:
-            if signal_name not in fired_dict or max_sim > fired_dict[signal_name]:
+            # The "max-of-duplicates" guard is structurally unreachable in a
+            # single call (signal_name is a dict key in _anchor_embeddings and
+            # so visits each name once), but it's cheap insurance against a
+            # future refactor that adds chunk-level looping inside this block.
+            if signal_name not in fired_dict or max_sim > fired_dict[signal_name]:  # pragma: no branch
                 fired_dict[signal_name] = max_sim
 
     # ── Whitelist check ──────────────────────────────────────────────────────

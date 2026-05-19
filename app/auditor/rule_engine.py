@@ -30,6 +30,7 @@ No LLM calls. No probabilistic reasoning. Pure logic + semantic math.
 import json
 import logging
 import os
+import re
 from typing import Optional
 
 from app.auditor.models import (
@@ -60,6 +61,23 @@ _REGULATIONS_PATH = os.path.normpath(
 AFFIRMATIVE_KEYWORDS: frozenset[str] = frozenset({
     "yes", "yep", "sure", "understand", "agree", "confirm", "proceed", "acknowledge",
 })
+
+
+def _scrap_is_grounded(scrap: str, prompt: str) -> bool:
+    """
+    Word-boundary check that the scrap actually appears in the prompt.
+
+    Plain substring matching is too loose — a scrap of "user" matches inside
+    "username".  We compare on a normalised, word-boundary-tokenised form:
+    every contiguous run of word characters in the scrap must appear as a
+    word-boundary match in the prompt, in order.  Non-word chars in the
+    scrap (punctuation, whitespace) don't have to match anything.
+    """
+    scrap_words = re.findall(r"\w+", scrap.lower())
+    if not scrap_words:
+        return False
+    pattern = r"\b" + r"\W+".join(re.escape(w) for w in scrap_words) + r"\b"
+    return re.search(pattern, prompt.lower()) is not None
 
 
 # ===========================================================================
@@ -288,7 +306,11 @@ def run_static_checks(
                     1.0,
                 )
                 rule_weight = get_rule_weight("STATIC_PORTFOLIO")
-                dynamic_weight = rule_weight + (1.0 - rule_weight) * overage_fraction
+                # Defensive clamp: the lerp is mathematically bounded by 1.0 when
+                # rule_weight ∈ [0, 1] (the invariant DEFAULT_RULE_WEIGHTS holds),
+                # but if a future config sets rule_weight > 1.0 the bound breaks
+                # and the composite-product invariant goes with it.  Clamp here.
+                dynamic_weight = min(rule_weight + (1.0 - rule_weight) * overage_fraction, 1.0)
                 failures.append(FailedRuleDetail(
                     rule_id="STATIC_PORTFOLIO", clause_id="STATIC.05",
                     description=(
@@ -429,7 +451,7 @@ def _score_evidence_coverage(
     if not scrap:
         return 0.0
 
-    if scrap.lower() not in prompt.lower():
+    if not _scrap_is_grounded(scrap, prompt):
         logger.warning("Evidence grounding FAILED for %s: scrap=%r not in prompt", ev_id, scrap)
         return 0.0
 

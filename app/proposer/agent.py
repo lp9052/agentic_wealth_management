@@ -229,11 +229,17 @@ class TradeProposalSchema(BaseModel):
         'stock', 'future') to a canonical member of INSTRUMENT_TYPES.  Falling
         through means the value passes as-is to the auditor, which then trips
         the unknown-instrument path.
+
+        None and empty/whitespace values collapse to "EQUITY" so downstream
+        consumers never see an empty instrument_type — this is the contract
+        that lets the auditor_node skip its own ``or "EQUITY"`` fallback.
         """
         if v is None:
             return "EQUITY"
         # Step 1: uppercase, collapse whitespace/hyphens into underscores
         s = _re.sub(r"[\s\-]+", "_", str(v).strip().upper())
+        if not s:
+            return "EQUITY"
         if s in INSTRUMENT_TYPES:
             return s
         # Step 2: light alias mapping for the most common LLM variants
