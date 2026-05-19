@@ -435,6 +435,18 @@ def _seed_minimal_db(db_path: str) -> None:
     c.execute("INSERT INTO kyc_requirements VALUES (?, ?, ?, ?, ?, ?)",
               ("OP.ticker_exists.K", "OP.ticker_exists.T", "age", ">", "0", "profile"))
 
+    # Misconfigured KYC: LESS_THAN on a string field.  Exercises the
+    # bottom-of-function `return True` (conservative pass) in _kyc_passes
+    # when no op+value-type handler matches.
+    c.execute("INSERT INTO rule_clauses VALUES (?, ?, ?)",
+              ("OP.misconfig_op", "OP_COVERAGE", "LESS_THAN on string field"))
+    c.execute("INSERT INTO trigger_conditions VALUES (?, ?, ?, ?, ?)",
+              ("OP.misconfig_op.T", "OP.misconfig_op", "prompt_signal",
+               "CONTAINS", "SIG_MISCONFIG"))
+    c.execute("INSERT INTO kyc_requirements VALUES (?, ?, ?, ?, ?, ?)",
+              ("OP.misconfig_op.K", "OP.misconfig_op.T", "risk_tolerance",
+               "<", "Aggressive", "profile"))
+
     # Missing-field KYC, signal-triggered.  Used by tests to exercise both
     # `is_forced=True → return True` (when cascaded) and the default `return
     # False` (when triggered directly).

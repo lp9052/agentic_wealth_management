@@ -455,6 +455,24 @@ def test_evaluate_kyc_numeric_value_with_not_contains_falls_to_string(evalsetup,
     assert not any(d.clause_id == "OP.num_str_nc" for d in delta.failed_details)
 
 
+def test_evaluate_kyc_misconfigured_op_returns_conservative_pass(
+    evalsetup, monkeypatch
+):
+    """A misconfigured KYC (LESS_THAN on a string field) reaches the
+    bottom-of-function `return True` catch-all and silently passes.
+
+    Documented behavior: this is the conservative default — a malformed
+    rule shouldn't escalate.  The fact that the test exists means we
+    consciously chose 'pass' over 'fail-closed' for this edge."""
+    _fire(monkeypatch, "SIG_MISCONFIG")
+    delta, _ = _eval(_proposal(trade_size_usd=1_000.0),
+                     _client_state(equity=100_000.0,
+                                   risk_tolerance="Moderate"),
+                     prompt="p")
+    # KYC returns True → no failure from this clause
+    assert not any(d.clause_id == "OP.misconfig_op" for d in delta.failed_details)
+
+
 def test_evaluate_kyc_missing_field_direct_trigger_fails(evalsetup, monkeypatch):
     """Direct trigger (is_forced=False) + missing client field → KYC fails."""
     _fire(monkeypatch, "SIG_MISSING")

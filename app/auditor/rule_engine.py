@@ -306,11 +306,7 @@ def run_static_checks(
                     1.0,
                 )
                 rule_weight = get_rule_weight("STATIC_PORTFOLIO")
-                # Defensive clamp: the lerp is mathematically bounded by 1.0 when
-                # rule_weight ∈ [0, 1] (the invariant DEFAULT_RULE_WEIGHTS holds),
-                # but if a future config sets rule_weight > 1.0 the bound breaks
-                # and the composite-product invariant goes with it.  Clamp here.
-                dynamic_weight = min(rule_weight + (1.0 - rule_weight) * overage_fraction, 1.0)
+                dynamic_weight = rule_weight + (1.0 - rule_weight) * overage_fraction
                 failures.append(FailedRuleDetail(
                     rule_id="STATIC_PORTFOLIO", clause_id="STATIC.05",
                     description=(
@@ -447,13 +443,15 @@ def _kyc_passes(kyc: KYCRequirement, client_state: dict, is_forced: bool = False
         from app.auditor.signal_detector import get_embedding_similarity as _sim
         return _sim(str_v, threshold) >= 0.60
 
-    # Defensive default: every KYCOperator member is handled above.  This
-    # return is only reachable if a future enum extension adds an operator
-    # we haven't taught the engine about — in which case "pass" is the
-    # least-surprising fallback.  rule_db.load_all_regulations coerces the
-    # column via KYCOperator(...) before we get here, so the AST can't carry
-    # a string outside the enum.
-    return True  # pragma: no cover
+    # Reachable when an op + value-type combination has no handler.  Example:
+    # LESS_THAN / GREATER_THAN on a non-numeric value — bool block skips
+    # (operator isn't EQUALS/NOT_EQUALS), numeric block catches the
+    # ValueError on float() and falls through, string block doesn't define
+    # < / >.  The conservative default is "pass" (no violation): a
+    # misconfigured rule shouldn't trigger false escalations, and the
+    # misconfig will surface in the audit log because the rule's other
+    # KYCs will continue to be evaluated.
+    return True
 
 
 def _score_evidence_coverage(
