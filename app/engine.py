@@ -14,17 +14,14 @@ Also supports unsupervised mode (no auditing) for benchmarking.
 """
 
 import logging
-import warnings
-import numpy as np
 from typing import TypedDict
-
-# Silence EOL and Hardware-level numerical noise
-warnings.filterwarnings("ignore", category=FutureWarning)
-warnings.filterwarnings("ignore", category=RuntimeWarning)
-np.seterr(all='ignore')
 
 from dotenv import load_dotenv
 load_dotenv()  # Ensure GOOGLE_API_KEY is available from .env
+
+# Note: numerical-warning suppression lives in signal_detector.py, scoped to
+# the specific call sites (Apple Silicon MPS NaN/inf) via np.errstate — we
+# deliberately don't blanket-silence FutureWarning / RuntimeWarning here.
 
 from langgraph.graph import StateGraph, START, END
 
@@ -193,41 +190,25 @@ def auditor_node(state: AgentState) -> dict:
     Deterministic compliance auditor - evaluates the proposal against
     regulatory rules using pure logic (no LLM calls).
     """
-    from app.auditor.models import TradeProposal, ProvidedEvidence
+    from app.auditor.models import TradeProposal
 
-    proposal_data = state.get("proposal_json", {})
-
-    # Reconstruct TradeProposal from state
-    evidence = [
-        ProvidedEvidence(
-            evidence_id=e.get("evidence_id", ""),
-            value=e.get("value", False),
-            scrap=e.get("scrap", ""),
-        )
-        for e in proposal_data.get("provided_evidence", [])
-    ]
-
-    trade_proposal = TradeProposal(
-        proposal_id=proposal_data.get("proposal_id", ""),
-        client_id=state["client_id"],
-        action=proposal_data.get("action", "REVIEW"),
-        asset_ticker=proposal_data.get("asset_ticker", ""),
-        instrument_type=proposal_data.get("instrument_type", "EQUITY") or "EQUITY",
-        trade_size_usd=proposal_data.get("trade_size_usd", 0.0),
-        rationale=proposal_data.get("rationale", ""),
-        provided_evidence=evidence,
+    # Rehydrate the TradeProposal from the JSON-serialised state form.  The
+    # reconstruction lives on the dataclass (TradeProposal.from_proposal_json)
+    # so any other consumer that pulls a proposal off the wire uses the same
+    # defaults and field names.
+    trade_proposal = TradeProposal.from_proposal_json(
+        state.get("proposal_json", {}), state["client_id"]
     )
 
     # Get normalized client state
     client_state = get_client_state(state["client_id"], state.get("client_data"))
 
-    # Run the deterministic auditor.
-    # Pass the original user prompt for signal detection and the current revision round
-    # so SBCRiskScore.iteration correctly records which loop cycle produced each score.
+    # Run the deterministic auditor.  ``iteration`` records which loop cycle
+    # produced this score, so SBCRiskScore.iteration is right in the audit trail.
+    iteration = state.get("revision_count", 1)
     user_prompt = state.get("prompt", "")
-    current_iteration = state.get("revision_count", 1)
     delta, audit_risk = evaluate_proposal(
-        trade_proposal, client_state, user_prompt, iteration=current_iteration
+        trade_proposal, client_state, user_prompt, iteration=iteration
     )
 
     # Build human-readable critique with SBC gate decision
@@ -271,8 +252,8 @@ def auditor_node(state: AgentState) -> dict:
     prev_scores = state.get("risk_scores", []) or []
     new_scores = prev_scores + [audit_risk.to_dict()]
 
-    # Append auditor decision to history_log
-    iteration = state.get("revision_count", 1)
+    # Append auditor decision to history_log (reusing ``iteration`` from above
+    # — there's exactly one notion of "current round" per audit call).
     audit_entry = (
         f"[AUDITOR — Round {iteration}] Status: {status}\n"
         f"  Audit Risk  : {audit_risk.composite_score:.3f} ({audit_risk.risk_level})\n"

@@ -30,6 +30,7 @@ No LLM calls. No probabilistic reasoning. Pure logic + semantic math.
 import json
 import logging
 import os
+import re
 from typing import Optional
 
 from app.auditor.models import (
@@ -60,6 +61,23 @@ _REGULATIONS_PATH = os.path.normpath(
 AFFIRMATIVE_KEYWORDS: frozenset[str] = frozenset({
     "yes", "yep", "sure", "understand", "agree", "confirm", "proceed", "acknowledge",
 })
+
+
+def _scrap_is_grounded(scrap: str, prompt: str) -> bool:
+    """
+    Word-boundary check that the scrap actually appears in the prompt.
+
+    Plain substring matching is too loose — a scrap of "user" matches inside
+    "username".  We compare on a normalised, word-boundary-tokenised form:
+    every contiguous run of word characters in the scrap must appear as a
+    word-boundary match in the prompt, in order.  Non-word chars in the
+    scrap (punctuation, whitespace) don't have to match anything.
+    """
+    scrap_words = re.findall(r"\w+", scrap.lower())
+    if not scrap_words:
+        return False
+    pattern = r"\b" + r"\W+".join(re.escape(w) for w in scrap_words) + r"\b"
+    return re.search(pattern, prompt.lower()) is not None
 
 
 # ===========================================================================
@@ -334,16 +352,36 @@ def run_static_checks(
 # ===========================================================================
 
 def _trigger_matches(condition: TriggerCondition, proposal: TradeProposal) -> bool:
-    """Check if a trigger condition matches the proposal fields."""
+    """Check if a trigger condition matches the proposal fields.
+
+    Supported (trigger_field, trigger_operator) combinations:
+      prompt_signal × {CONTAINS, EQUALS} → trigger_value must appear in
+                                            proposal.prompt_signals
+      prompt_signal × EXISTS              → any signal at all is present;
+                                            trigger_value is ignored
+      proposal.action × EQUALS            → exact match (case-insensitive)
+      proposal.action × IN                → action ∈ comma-list of allowed
+      proposal.action × EXISTS            → action is non-empty
+      proposal.asset_ticker × EXISTS      → ticker is non-empty
+    """
     if condition.trigger_field == "prompt_signal":
         if condition.trigger_operator in (TriggerOperator.CONTAINS, TriggerOperator.EQUALS):
             return condition.trigger_value in proposal.prompt_signals
+        elif condition.trigger_operator == TriggerOperator.EXISTS:
+            # "Any signal fired" — useful for catch-all rules that escalate
+            # whenever the semantic detector flags anything at all.
+            return len(proposal.prompt_signals) > 0
     elif condition.trigger_field == "proposal.action":
         if condition.trigger_operator == TriggerOperator.EQUALS:
             return proposal.action.upper() == condition.trigger_value.upper()
         elif condition.trigger_operator == TriggerOperator.IN:
             allowed = [v.strip().strip("'\"") for v in condition.trigger_value.strip("[]").split(",")]
             return proposal.action.upper() in [a.upper() for a in allowed]
+        elif condition.trigger_operator == TriggerOperator.EXISTS:
+            return bool(proposal.action)
+    elif condition.trigger_field == "proposal.asset_ticker":
+        if condition.trigger_operator == TriggerOperator.EXISTS:
+            return bool((proposal.asset_ticker or "").strip())
     return False
 
 
@@ -405,6 +443,14 @@ def _kyc_passes(kyc: KYCRequirement, client_state: dict, is_forced: bool = False
         from app.auditor.signal_detector import get_embedding_similarity as _sim
         return _sim(str_v, threshold) >= 0.60
 
+    # Reachable when an op + value-type combination has no handler.  Example:
+    # LESS_THAN / GREATER_THAN on a non-numeric value — bool block skips
+    # (operator isn't EQUALS/NOT_EQUALS), numeric block catches the
+    # ValueError on float() and falls through, string block doesn't define
+    # < / >.  The conservative default is "pass" (no violation): a
+    # misconfigured rule shouldn't trigger false escalations, and the
+    # misconfig will surface in the audit log because the rule's other
+    # KYCs will continue to be evaluated.
     return True
 
 
@@ -414,6 +460,7 @@ def _score_evidence_coverage(
     description: str,
     prompt: str,
     is_ack: bool,
+    evidence_path: str = "",
 ) -> float:
     """
     Compute C_ev ∈ [0, 1] for a single provided evidence item.
@@ -421,7 +468,12 @@ def _score_evidence_coverage(
     Decision order:
       * empty scrap                        → 0.0
       * scrap not grounded in user prompt  → 0.0  (warned — possible LLM hallucination)
-      * AST has no description for ev_id   → 1.0  (nothing to compare; provided counts)
+      * non-ACK AND empty evidence_path    → 0.0  (cite-your-source: any
+                                                   semantic cure must point at
+                                                   a known rule via its GraphRAG
+                                                   id; ACKs don't need a citation
+                                                   since the user's "yes" IS the
+                                                   evidence)
       * is_ack AND scrap is affirmative    → 1.0  (ACK fast-path — "yes" wouldn't
                                                    embed-match a 20-word legal phrase)
       * otherwise                          → semantic similarity from the ensemble model
@@ -429,21 +481,35 @@ def _score_evidence_coverage(
     if not scrap:
         return 0.0
 
-    if scrap.lower() not in prompt.lower():
+    if not _scrap_is_grounded(scrap, prompt):
         logger.warning("Evidence grounding FAILED for %s: scrap=%r not in prompt", ev_id, scrap)
         return 0.0
 
-    if not description:
-        return 1.0
+    # description is guaranteed non-empty: rule_db.load_all_regulations
+    # rejects empty AST descriptions; run_static_checks always emits a
+    # human-readable description on every FailedRuleDetail that carries a
+    # missing_evidence_id.
 
     if is_ack and any(k in scrap.lower() for k in AFFIRMATIVE_KEYWORDS):
         logger.info("Evidence '%s': Fast-path ACK match for scrap=%r", ev_id, scrap)
         return 1.0
 
+    # Cite-your-source: semantic-similarity cures require a GraphRAG citation
+    # so the audit trail can verify the proposer pulled from the right rule.
+    # An empty path on a non-ACK evidence is a sign the LLM hallucinated the
+    # cure without consulting the knowledge base.
+    if not evidence_path.strip():
+        logger.warning(
+            "Evidence '%s': non-ACK evidence has empty evidence_path; "
+            "rejecting as unsupported (scrap=%r)",
+            ev_id, scrap,
+        )
+        return 0.0
+
     sim = max(get_embedding_similarity(scrap, description), 0.0)
     logger.info(
-        "Evidence '%s': C_ev = %.3f (scrap=%r vs desc=%r)",
-        ev_id, sim, scrap[:60], description[:60],
+        "Evidence '%s': C_ev = %.3f (scrap=%r vs desc=%r, path=%r)",
+        ev_id, sim, scrap[:60], description[:60], evidence_path,
     )
     return sim
 
@@ -596,19 +662,22 @@ def evaluate_proposal(
     # compute a continuous C_ev ∈ [0, 1].  When a rule has multiple required
     # evidence items, compute_audit_risk takes min(scores) as the rule's
     # C_ev (weakest link).
-    evidence_map = {e.evidence_id: e.scrap for e in proposal.provided_evidence}
+    evidence_map = {e.evidence_id: (e.scrap, e.evidence_path)
+                    for e in proposal.provided_evidence}
     provided_ev_ids = {e.evidence_id for e in proposal.provided_evidence if e.value}
 
     evidence_scores: dict[str, float] = {}
     for ev_id in set(all_missing_evidence):
         if ev_id not in provided_ev_ids:
             continue
+        scrap, ev_path = evidence_map.get(ev_id, ("", ""))
         evidence_scores[ev_id] = _score_evidence_coverage(
             ev_id,
-            scrap=evidence_map.get(ev_id, "").strip(),
+            scrap=scrap.strip(),
             description=evidence_descriptions.get(ev_id, ""),
             prompt=prompt,
             is_ack=evidence_is_ack.get(ev_id, False),
+            evidence_path=ev_path,
         )
 
     # ── 6. Composite audit risk (TSF · (1 − C_ev) · ω, complement-product) ──

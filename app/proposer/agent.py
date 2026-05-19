@@ -153,7 +153,16 @@ class ProvidedEvidenceSchema(BaseModel):
     scrap: str = ""
     evidence_path: str = Field(
         default="",
-        description="The specific GraphRAG or document path/link from the retrieved context justifying this evidence. e.g. [GraphRAG ID: FINRA_2111]"
+        description=(
+            "REQUIRED for every non-ACK evidence item: the GraphRAG citation "
+            "from the retrieved knowledge base that grounds this evidence — "
+            "format '[GraphRAG ID: <RULE_ID>]', e.g. '[GraphRAG ID: FINRA_2111]'.  "
+            "The Auditor rejects non-ACK evidence with an empty path (C_ev=0), "
+            "so the trade will not cure without one.  "
+            "OMIT (empty string) only for the three acknowledgment-type evidence "
+            "IDs whose value comes from the user's reply rather than a regulation: "
+            "EVID_RISK_OVERRIDE_ACK, EVID_SUITABILITY_ACK, EVID_CONCENTRATION_ACK."
+        ),
     )
 
 class TradeProposalSchema(BaseModel):
@@ -189,7 +198,12 @@ class TradeProposalSchema(BaseModel):
         )
     )
     user_question: str = Field(
-        description="Direct question to the user asking for missing information or acknowledgment."
+        default="",
+        description=(
+            "Direct question to the user asking for missing information or "
+            "acknowledgment.  Required when action=REVIEW; ignored for "
+            "BUY/SELL/HOLD (defaults to empty)."
+        ),
     )
     provided_evidence: list[ProvidedEvidenceSchema] = Field(default_factory=list)
 
@@ -229,11 +243,17 @@ class TradeProposalSchema(BaseModel):
         'stock', 'future') to a canonical member of INSTRUMENT_TYPES.  Falling
         through means the value passes as-is to the auditor, which then trips
         the unknown-instrument path.
+
+        None and empty/whitespace values collapse to "EQUITY" so downstream
+        consumers never see an empty instrument_type — this is the contract
+        that lets the auditor_node skip its own ``or "EQUITY"`` fallback.
         """
         if v is None:
             return "EQUITY"
         # Step 1: uppercase, collapse whitespace/hyphens into underscores
         s = _re.sub(r"[\s\-]+", "_", str(v).strip().upper())
+        if not s:
+            return "EQUITY"
         if s in INSTRUMENT_TYPES:
             return s
         # Step 2: light alias mapping for the most common LLM variants
