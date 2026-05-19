@@ -254,6 +254,16 @@ def auditor_node(state: AgentState) -> dict:
         critique += "\nProposer must revise or provide evidence to reduce risk score."
         status = "NEEDS_REVISION"
 
+    # REVIEW = proposer asking a clarifying question, no trade proposed.
+    # The audit_risk above scores any signals in the user prompt for the
+    # audit trail, but a clean prompt would route to AUTO_APPROVE → END,
+    # which would terminate the session before the user has even answered
+    # the question.  Force NEEDS_REVISION so the loop continues through
+    # user_simulator_node; HUMAN_ESCALATION still wins (a signal in the
+    # prompt that warrants escalation should still block).
+    if trade_proposal.action == "REVIEW" and status == "CERTIFIED_COMPLIANT":
+        status = "NEEDS_REVISION"
+
     if state.get("is_real_time"):
         print(f"\n\033[1;35m{critique}\033[0m")
 
@@ -272,7 +282,7 @@ def auditor_node(state: AgentState) -> dict:
     for comp in audit_risk.components:
         audit_entry += (
             f"  ↳ [{comp.rule_id}|{'ABS' if comp.bypass_tsf else 'GRD'}] "
-            f"R={comp.clamped_score:.3f} TSF={comp.trade_size_factor:.4f} "
+            f"R={comp.score:.3f} TSF={comp.trade_size_factor:.4f} "
             f"C_ev={comp.evidence_coverage:.3f} ω={comp.omega}\n"
         )
     for d in delta.failed_details:
@@ -334,12 +344,13 @@ def user_simulator_node(state: AgentState) -> dict:
 # ---------------------------------------------------------------------------
 
 def router_node(state: AgentState) -> str:
-    """Route after proposer: to auditor or directly to user.
+    """Route after proposer.
 
-    The auditor runs on concrete trade proposals (BUY/SELL/HOLD).
-    If the proposer is merely asking a question (REVIEW), we skip the
-    redundant auditor pass in real-time mode to avoid double-printing
-    identical risk scores.
+    Always send to the auditor — the audit trail records every round,
+    including REVIEW (question) rounds.  Real-time and unsupervised
+    modes are intentionally identical here; the only mode-conditional
+    behavior in the graph is inside ``user_simulator_node`` (human
+    input vs. test-data injection).
     """
     if not state.get("supervisor_enabled", True):
         return END
@@ -347,52 +358,43 @@ def router_node(state: AgentState) -> str:
     # Convergence safety valve: after MAX_ITERATIONS, escalate to human review
     if state.get("revision_count", 0) >= MAX_ITERATIONS:
         return END
-    
-    proposal_action = state.get("proposal_json", {}).get("action", "")
-    if proposal_action == "REVIEW" and state.get("is_real_time"):
-        return "user_simulator_node"
-        
+
     return "auditor_node"
 
 
 def compliance_router(state: AgentState) -> str:
     """Route after auditor: approve, retry, or block.
 
-    Routing is driven by the SBC gate decision (via status).
-    REVIEW rounds always loop back because no trade has been proposed yet —
-    this is session flow, not a compliance override.
+    Identical in real-time and unsupervised modes.  Terminal statuses
+    (CERTIFIED_COMPLIANT, CRITICAL_BLOCK) always END regardless of
+    action type — escalation on a REVIEW round (e.g., INSIDER_TIP in
+    the user's question) must still hard-block the session.
+
+    Non-terminal outcomes route through ``user_simulator_node`` so info
+    can be injected (test) or solicited (real-time) before the next
+    proposer attempt.  user_simulator_node is a no-op when neither
+    applies, and user_simulator_router falls through to proposer_node.
+
+    Note: REVIEW + AUTO_APPROVE was rewritten to NEEDS_REVISION in
+    ``auditor_node`` so that pure question rounds don't terminate
+    before the user has answered.  Only HUMAN_ESCALATION can end a
+    REVIEW round here, which is the intended behavior.
     """
     status = state.get("status", "")
 
     if status == "CERTIFIED_COMPLIANT":
         return END
-
     if status == "CRITICAL_BLOCK":
-        return END  # Hard block, no retry
+        return END  # Hard block, no retry — even for REVIEW
 
     # Convergence safety valve: after MAX_ITERATIONS, escalate to human review
     if state.get("revision_count", 0) >= MAX_ITERATIONS:
         return END
 
-    # REVIEW round: proposer is gathering info, not proposing a trade.
-    # The SBC score is recorded for the audit trail, but the session must
-    # continue so the user can answer the proposer's question.
-    proposal_action = state.get("proposal_json", {}).get("action", "")
-    if proposal_action == "REVIEW":
-        if state.get("is_real_time"):
-            return "user_simulator_node"
-        return "proposer_node"
-
-    if state.get("is_real_time"):
-        # BUY/SELL with REFINEMENT: proposer must reformulate its
-        # question/evidence request based on the auditor's constraint delta.
-        return "proposer_node"
-
-    # Automated mode: inject additional info if available, then retry proposer.
-    if state.get("additional_info") and not state.get("info_injected"):
-        return "user_simulator_node"
-
-    return "proposer_node"
+    # Non-terminal: route through user node.  Applies uniformly to
+    # REVIEW (proposer asked a question) and REFINEMENT (proposer
+    # proposed a trade that needs revision).
+    return "user_simulator_node"
 
 
 def user_simulator_router(state: AgentState) -> str:

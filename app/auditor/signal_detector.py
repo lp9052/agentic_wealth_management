@@ -40,10 +40,19 @@ _NORMAL_PATH = os.path.join(
     os.path.dirname(__file__), "..", "..", "data", "normal_corpus.json"
 )
 
-# Statistical boundary (Z-Score) used to set per-signal detection thresholds
+# Statistical boundary (Z-Score) used to set per-signal detection thresholds:
+#   θ_sig = max(mean_noise_sig + Z·std_noise_sig, 0.60)
+# Calibrate against the expanded normal_corpus.json + attack_prompts.json
+# by running `python3 scripts/tune_thresholds.py` and pasting the
+# recommended value back here.  Floor of 0.60 hedges against unusually
+# low noise floors on signals with poor anchor coverage.
 Z_SCORE_THRESHOLD: float = 2.0
 
 # ── Whitelist gate threshold ────────────────────────────────────────────────
+# A prompt whose max cosine similarity to the normal corpus falls below
+# this value is flagged NON_STANDARD_REQUEST.  Higher → more aggressive
+# (more legal prompts get flagged); lower → more permissive.  Tune via
+# scripts/tune_thresholds.py against the legal-FP-rate budget.
 WHITELIST_THRESHOLD: float = 0.55
 
 
