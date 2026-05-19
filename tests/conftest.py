@@ -221,6 +221,22 @@ def _seed_minimal_db(db_path: str) -> None:
               ("EVID_RISK_OVERRIDE_ACK", "2111.01.K1",
                "Client acknowledges high risk in writing.", 1))
 
+    # FINRA_2111 clause 2 — non-ACK evidence (risk officer sign-off).  The
+    # semantic-similarity path in _score_evidence_coverage is reachable only
+    # through a non-ACK evidence + non-empty evidence_path; this clause is
+    # where tests exercise that.
+    c.execute("INSERT INTO rule_clauses VALUES (?, ?, ?)",
+              ("2111.02", "FINRA_2111", "Speculative product trading"))
+    c.execute("INSERT INTO trigger_conditions VALUES (?, ?, ?, ?, ?)",
+              ("2111.02.T1", "2111.02", "prompt_signal", "CONTAINS", "SPECULATIVE_PRODUCT"))
+    c.execute("INSERT INTO kyc_requirements VALUES (?, ?, ?, ?, ?, ?)",
+              ("2111.02.K1", "2111.02.T1", "compliance_history",
+               "NOT_CONTAINS", "violation", "profile"))
+    c.execute("INSERT INTO evidence_fallbacks (evidence_id, kyc_id, description, is_ack) "
+              "VALUES (?, ?, ?, ?)",
+              ("EVID_SPECULATIVE_WAIVER", "2111.02.K1",
+               "Risk officer sign-off documenting speculative trading approval.", 0))
+
     # FINRA_2090 — absolute, KYC bypass, proposal_check (always fails when triggered)
     c.execute("INSERT INTO regulations VALUES (?, ?, ?, ?)",
               ("FINRA_2090", "KYC", 1, "KYC duty"))
@@ -355,26 +371,36 @@ def _seed_minimal_db(db_path: str) -> None:
               ("OP.num_str_nc.K", "OP.num_str_nc.T", "age", "NOT_CONTAINS",
                "42", "profile"))
 
-    # Trigger field outside (prompt_signal, proposal.action) — exercises the
-    # `return False` fallthrough in _trigger_matches.
+    # Trigger field outside the known three (prompt_signal / proposal.action /
+    # proposal.asset_ticker) — exercises the bottom `return False` in
+    # _trigger_matches via the "no outer branch matched" path.
     c.execute("INSERT INTO rule_clauses VALUES (?, ?, ?)",
               ("OP.unknown_field", "OP_COVERAGE", "unknown trigger_field"))
     c.execute("INSERT INTO trigger_conditions VALUES (?, ?, ?, ?, ?)",
-              ("OP.unknown_field.T", "OP.unknown_field", "proposal.asset_ticker",
+              ("OP.unknown_field.T", "OP.unknown_field", "proposal.future_field",
                "==", "ANY"))
     c.execute("INSERT INTO kyc_requirements VALUES (?, ?, ?, ?, ?, ?)",
               ("OP.unknown_field.K", "OP.unknown_field.T", "age", ">", "0", "profile"))
 
-    # prompt_signal with EXISTS operator — exercises the inner `return False`
-    # when operator isn't CONTAINS/EQUALS.
+    # prompt_signal × EXISTS — now a supported semantics ("any signal fired").
     c.execute("INSERT INTO rule_clauses VALUES (?, ?, ?)",
               ("OP.sig_exists", "OP_COVERAGE", "prompt_signal EXISTS"))
     c.execute("INSERT INTO trigger_conditions VALUES (?, ?, ?, ?, ?)",
-              ("OP.sig_exists.T", "OP.sig_exists", "prompt_signal", "EXISTS", "X"))
+              ("OP.sig_exists.T", "OP.sig_exists", "prompt_signal", "EXISTS", ""))
     c.execute("INSERT INTO kyc_requirements VALUES (?, ?, ?, ?, ?, ?)",
               ("OP.sig_exists.K", "OP.sig_exists.T", "age", ">", "0", "profile"))
 
-    # proposal.action with CONTAINS operator — exercises action-side `return False`.
+    # prompt_signal × IN — unsupported on prompt_signal; exercises the
+    # "neither CONTAINS/EQUALS nor EXISTS" fallthrough → return False.
+    c.execute("INSERT INTO rule_clauses VALUES (?, ?, ?)",
+              ("OP.sig_in", "OP_COVERAGE", "prompt_signal IN (unsupported)"))
+    c.execute("INSERT INTO trigger_conditions VALUES (?, ?, ?, ?, ?)",
+              ("OP.sig_in.T", "OP.sig_in", "prompt_signal", "IN", "[A,B]"))
+    c.execute("INSERT INTO kyc_requirements VALUES (?, ?, ?, ?, ?, ?)",
+              ("OP.sig_in.K", "OP.sig_in.T", "age", ">", "0", "profile"))
+
+    # proposal.action × CONTAINS — unsupported on action; exercises
+    # action-side fallthrough.
     c.execute("INSERT INTO rule_clauses VALUES (?, ?, ?)",
               ("OP.act_contains", "OP_COVERAGE", "proposal.action CONTAINS"))
     c.execute("INSERT INTO trigger_conditions VALUES (?, ?, ?, ?, ?)",
@@ -382,6 +408,32 @@ def _seed_minimal_db(db_path: str) -> None:
                "CONTAINS", "BUY"))
     c.execute("INSERT INTO kyc_requirements VALUES (?, ?, ?, ?, ?, ?)",
               ("OP.act_contains.K", "OP.act_contains.T", "age", ">", "0", "profile"))
+
+    # proposal.action × EXISTS — supported.
+    c.execute("INSERT INTO rule_clauses VALUES (?, ?, ?)",
+              ("OP.act_exists", "OP_COVERAGE", "proposal.action EXISTS"))
+    c.execute("INSERT INTO trigger_conditions VALUES (?, ?, ?, ?, ?)",
+              ("OP.act_exists.T", "OP.act_exists", "proposal.action", "EXISTS", ""))
+    c.execute("INSERT INTO kyc_requirements VALUES (?, ?, ?, ?, ?, ?)",
+              ("OP.act_exists.K", "OP.act_exists.T", "age", ">", "0", "profile"))
+
+    # proposal.asset_ticker × EQUALS — unsupported (only EXISTS handled there).
+    c.execute("INSERT INTO rule_clauses VALUES (?, ?, ?)",
+              ("OP.ticker_eq", "OP_COVERAGE", "proposal.asset_ticker EQUALS"))
+    c.execute("INSERT INTO trigger_conditions VALUES (?, ?, ?, ?, ?)",
+              ("OP.ticker_eq.T", "OP.ticker_eq", "proposal.asset_ticker",
+               "==", "ANY"))
+    c.execute("INSERT INTO kyc_requirements VALUES (?, ?, ?, ?, ?, ?)",
+              ("OP.ticker_eq.K", "OP.ticker_eq.T", "age", ">", "0", "profile"))
+
+    # proposal.asset_ticker × EXISTS — supported.
+    c.execute("INSERT INTO rule_clauses VALUES (?, ?, ?)",
+              ("OP.ticker_exists", "OP_COVERAGE", "proposal.asset_ticker EXISTS"))
+    c.execute("INSERT INTO trigger_conditions VALUES (?, ?, ?, ?, ?)",
+              ("OP.ticker_exists.T", "OP.ticker_exists", "proposal.asset_ticker",
+               "EXISTS", ""))
+    c.execute("INSERT INTO kyc_requirements VALUES (?, ?, ?, ?, ?, ?)",
+              ("OP.ticker_exists.K", "OP.ticker_exists.T", "age", ">", "0", "profile"))
 
     # Missing-field KYC, signal-triggered.  Used by tests to exercise both
     # `is_forced=True → return True` (when cascaded) and the default `return
@@ -416,19 +468,6 @@ def _seed_minimal_db(db_path: str) -> None:
               ("OP.portfolio_check.K", "OP.portfolio_check.T", "any", "==",
                "any", "portfolio_check"))
 
-    # Evidence fallback with an empty description — exercises the
-    # `if not description: return 1.0` short-circuit in _score_evidence_coverage.
-    c.execute("INSERT INTO rule_clauses VALUES (?, ?, ?)",
-              ("OP.empty_desc", "OP_COVERAGE", "evidence with empty description"))
-    c.execute("INSERT INTO trigger_conditions VALUES (?, ?, ?, ?, ?)",
-              ("OP.empty_desc.T", "OP.empty_desc", "prompt_signal",
-               "CONTAINS", "SIG_EMPTY_DESC"))
-    c.execute("INSERT INTO kyc_requirements VALUES (?, ?, ?, ?, ?, ?)",
-              ("OP.empty_desc.K", "OP.empty_desc.T", "nonexistent_field",
-               "==", "x", "profile"))
-    c.execute("INSERT INTO evidence_fallbacks (evidence_id, kyc_id, description, is_ack) "
-              "VALUES (?, ?, ?, ?)",
-              ("EVID_EMPTY_DESC", "OP.empty_desc.K", "", 0))
 
     # STATIC_PORTFOLIO — required so the engine can harvest the
     # EVID_CONCENTRATION_ACK description from the AST.
@@ -460,12 +499,11 @@ def seeded_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> str:
     the production DB.  We wrap the loader to force-use the test DB.
     """
     from app.auditor import rule_registry
-    from app.database import client_db, rule_db, schema
+    from app.database import rule_db, schema
 
     db_path = str(tmp_path / "rules.db")
     _seed_minimal_db(db_path)
     monkeypatch.setattr(schema, "DB_PATH", db_path)
-    monkeypatch.setattr(client_db, "DB_PATH", db_path)
     monkeypatch.setattr(rule_db, "DB_PATH", db_path)
 
     real_loader = rule_db.load_all_regulations

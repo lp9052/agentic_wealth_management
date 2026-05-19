@@ -189,7 +189,12 @@ class TradeProposalSchema(BaseModel):
         )
     )
     user_question: str = Field(
-        description="Direct question to the user asking for missing information or acknowledgment."
+        default="",
+        description=(
+            "Direct question to the user asking for missing information or "
+            "acknowledgment.  Required when action=REVIEW; ignored for "
+            "BUY/SELL/HOLD (defaults to empty)."
+        ),
     )
     provided_evidence: list[ProvidedEvidenceSchema] = Field(default_factory=list)
 

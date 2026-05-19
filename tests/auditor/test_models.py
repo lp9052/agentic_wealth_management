@@ -170,7 +170,7 @@ def test_constraint_delta_to_dict_allow_true_status_is_allow():
 
 def test_ast_dataclass_defaults():
     """RuleClause / TriggerCondition / Regulation defaults populate properly."""
-    fb = EvidenceFallback(evidence_id="E", kyc_id="K", description="d")
+    fb = EvidenceFallback(evidence_id="E", description="d")
     assert fb.is_ack is False
 
     kyc = KYCRequirement(

@@ -10,7 +10,6 @@ import os
 import logging
 from typing import Optional
 
-from app.database.schema import get_connection, DB_PATH
 
 logger = logging.getLogger(__name__)
 
@@ -139,47 +138,3 @@ def _empty_state() -> dict:
     }
 
 
-def sync_vault_to_db(db_path: str = DB_PATH) -> None:
-    """
-    Sync vault.json clients into the SQLite client tables.
-    Used for audit trail queries and reporting.
-    """
-    _load_vault()
-    conn = get_connection(db_path)
-    c = conn.cursor()
-
-    c.execute("DELETE FROM client_relations")
-    c.execute("DELETE FROM client_holdings")
-    c.execute("DELETE FROM clients")
-
-    for cid, data in _client_cache.items():
-        acct = data.get("account_state", {})
-        c.execute(
-            "INSERT INTO clients VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                cid,
-                data.get("archetype"),
-                data.get("age", 40),
-                data.get("risk_tolerance", "Moderate"),
-                data.get("intent_memos"),
-                data.get("compliance_history"),
-                1 if acct.get("kyc_verified", True) else 0,
-                1 if acct.get("aml_ofac_cleared", True) else 0,
-                acct.get("total_equity_usd", 0.0),
-            ),
-        )
-        for h in data.get("holdings", []):
-            c.execute(
-                "INSERT INTO client_holdings (client_id, asset, value, tax_lot_status, acquisition_date) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (cid, h["asset"], h.get("value"), h.get("tax_lot_status"), h.get("acquisition_date")),
-            )
-        for rel in data.get("relational_map", []):
-            c.execute(
-                "INSERT INTO client_relations (client_id, relation) VALUES (?, ?)",
-                (cid, rel),
-            )
-
-    conn.commit()
-    conn.close()
-    logger.info("Synced %d clients to SQLite", len(_client_cache))

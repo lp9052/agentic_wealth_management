@@ -202,7 +202,6 @@ class ConstraintDelta:
 class EvidenceFallback:
     """An evidence item that can cure a RECOVERABLE KYC failure."""
     evidence_id: str
-    kyc_id: str
     description: str
     # True when this evidence is a user acknowledgment (e.g. "I accept the
     # risk").  An affirmative reply qualifies as a perfect-coverage scrap;

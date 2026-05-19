@@ -1,6 +1,6 @@
 """Tests for app/database/client_db.py — public surface only.
 
-Public API: get_client_data, get_client_state, sync_vault_to_db.
+Public API: get_client_data, get_client_state.
 
 The private _load_vault (file read + cache) and _empty_state (empty-state
 factory) are exercised through get_client_data / get_client_state.
@@ -14,7 +14,6 @@ from app.database import client_db
 from app.database.client_db import (
     get_client_data,
     get_client_state,
-    sync_vault_to_db,
 )
 
 
@@ -96,33 +95,3 @@ def test_get_client_state_empty_holdings_falls_back_to_account(vault_path):
     assert state["account_state"]["total_portfolio_value"] == 1234.0
 
 
-def test_sync_vault_to_db(vault_path, seeded_db, monkeypatch):
-    sync_vault_to_db(db_path=seeded_db)
-    from app.database.schema import get_connection
-    conn = get_connection(seeded_db)
-    row = conn.execute("SELECT * FROM clients WHERE client_id='C1'").fetchone()
-    assert row["age"] == 40
-    holdings = conn.execute(
-        "SELECT * FROM client_holdings WHERE client_id='C1'"
-    ).fetchall()
-    assert len(holdings) == 2
-    rels = conn.execute(
-        "SELECT * FROM client_relations WHERE client_id='C1'"
-    ).fetchall()
-    assert len(rels) == 1
-    assert rels[0]["relation"] == "spouse"
-    conn.close()
-
-
-def test_sync_vault_handles_missing_account_keys(vault_path, seeded_db):
-    """Client with no account_state shouldn't crash sync."""
-    minimal = [{"client_id": "MINI", "holdings": []}]
-    vault_path.write_text(json.dumps(minimal))
-    client_db._client_cache = {}
-    sync_vault_to_db(db_path=seeded_db)
-    from app.database.schema import get_connection
-    conn = get_connection(seeded_db)
-    row = conn.execute("SELECT * FROM clients WHERE client_id='MINI'").fetchone()
-    assert row is not None
-    assert row["kyc_verified"] == 1  # default True
-    conn.close()

@@ -645,22 +645,72 @@ def test_evaluate_evidence_value_false_is_skipped(evalsetup, monkeypatch):
     assert "EVID_RISK_OVERRIDE_ACK" in delta.missing_evidence_ids
 
 
+def _flagged_state(equity=100_000.0):
+    """Client with a prior violation — makes FINRA_2111 clause 2's
+    NOT_CONTAINS-violation KYC fail when SPECULATIVE_PRODUCT fires."""
+    return _client_state(equity=equity,
+                         compliance_history="prior violation noted")
+
+
 def test_evaluate_evidence_negative_semantic_score_clamps_to_zero(
     evalsetup, monkeypatch
 ):
-    """Negative cosine sim is clamped to 0 in _score_evidence_coverage."""
-    monkeypatch.setattr(rule_engine, "detect_signals", lambda p: ["HIGH_RISK_PRODUCT"])
+    """Negative cosine sim is clamped to 0 in _score_evidence_coverage.
+
+    Uses EVID_SPECULATIVE_WAIVER (non-ACK) so the test exercises the
+    cite-your-source path: a non-ACK evidence with non-empty evidence_path
+    is the only way to reach the semantic-similarity branch."""
+    monkeypatch.setattr(rule_engine, "detect_signals",
+                        lambda p: ["SPECULATIVE_PRODUCT"])
     monkeypatch.setattr(rule_engine, "get_embedding_similarity", lambda a, b: -0.5)
     prop = _proposal(
-        trade_size_usd=80_000.0, asset_ticker="TQQQ",
+        trade_size_usd=10_000.0, asset_ticker="TQQQ",
         provided_evidence=[ProvidedEvidence(
-            evidence_id="EVID_RISK_OVERRIDE_ACK", value=True,
-            scrap="something unrelated")],
+            evidence_id="EVID_SPECULATIVE_WAIVER", value=True,
+            scrap="something unrelated",
+            # Non-ACK semantic cures must carry a GraphRAG citation.
+            evidence_path="GraphRAG ID: FINRA_2111")],
     )
-    delta, _ = _eval(prop, _client_state(equity=100_000.0),
-                     prompt="leveraged something unrelated")
+    delta, _ = _eval(prop, _flagged_state(), prompt="leveraged something unrelated")
     # Clamped to 0 → no cure
     assert "FINRA_2111" in delta.failed_rules
+
+
+def test_evaluate_evidence_non_ack_without_path_is_rejected(
+    evalsetup, monkeypatch
+):
+    """Non-ACK evidence with empty evidence_path → C_ev=0 (cite-your-source rule)."""
+    monkeypatch.setattr(rule_engine, "detect_signals",
+                        lambda p: ["SPECULATIVE_PRODUCT"])
+    monkeypatch.setattr(rule_engine, "get_embedding_similarity", lambda a, b: 1.0)
+    prop = _proposal(
+        trade_size_usd=10_000.0, asset_ticker="TQQQ",
+        provided_evidence=[ProvidedEvidence(
+            evidence_id="EVID_SPECULATIVE_WAIVER", value=True,
+            scrap="risk officer signed off on this speculative trade",
+            evidence_path="")],  # empty path → reject
+    )
+    delta, _ = _eval(prop, _flagged_state(),
+                     prompt="risk officer signed off on this speculative trade")
+    # No cure despite perfect semantic similarity — path was missing
+    assert "FINRA_2111" in delta.failed_rules
+
+
+def test_evaluate_evidence_non_ack_with_path_cures_rule(evalsetup, monkeypatch):
+    """Non-ACK evidence WITH a path + high semantic sim → rule is cured."""
+    monkeypatch.setattr(rule_engine, "detect_signals",
+                        lambda p: ["SPECULATIVE_PRODUCT"])
+    monkeypatch.setattr(rule_engine, "get_embedding_similarity", lambda a, b: 0.95)
+    prop = _proposal(
+        trade_size_usd=1_000.0, asset_ticker="TQQQ",
+        provided_evidence=[ProvidedEvidence(
+            evidence_id="EVID_SPECULATIVE_WAIVER", value=True,
+            scrap="risk officer signed off on speculative trade",
+            evidence_path="GraphRAG ID: FINRA_2111")],
+    )
+    delta, _ = _eval(prop, _flagged_state(),
+                     prompt="risk officer signed off on speculative trade")
+    assert delta.gate_decision != "HUMAN_ESCALATION"
 
 
 def test_evaluate_evidence_no_description_in_ast_uses_static_fallback(
@@ -754,34 +804,28 @@ def test_evaluate_kyc_portfolio_check_returns_true(evalsetup, monkeypatch):
     assert not any(d.clause_id == "OP.portfolio_check" for d in delta.failed_details)
 
 
-# ── Evidence with empty description in the AST → 1.0 fast-path ─────────────
+# ── Empty AST evidence descriptions are rejected at load time ──────────────
 
-def test_evaluate_evidence_empty_description_returns_full_coverage(
-    evalsetup, monkeypatch
-):
-    """EVID_EMPTY_DESC has description='' in the AST — when grounded, the
-    `if not description: return 1.0` branch fires regardless of similarity.
-
-    Recording the cure-by-empty-desc on the public surface: with a known-bad
-    semantic score and ONLY the empty-desc rule firing, the trade still
-    auto-approves (C_ev=1.0 cancels the rule contribution).  Without the
-    empty-desc fast-path, C_ev would be 0.0 and the rule would fire."""
-    _fire(monkeypatch, "SIG_EMPTY_DESC")
-    from app.auditor import signal_detector
-    monkeypatch.setattr(signal_detector, "get_embedding_similarity", lambda a, b: 0.0)
-    prop = _proposal(
-        asset_ticker="TQQQ", trade_size_usd=50_000.0,
-        provided_evidence=[ProvidedEvidence(
-            evidence_id="EVID_EMPTY_DESC", value=True, scrap="grounded text")],
-    )
-    delta, risk = _eval(prop, _client_state(equity=100_000.0),
-                        prompt="grounded text appears here")
-    # The empty-desc cure means the OP_COVERAGE component is fully discounted.
-    op_components = [c for c in risk.components if c.rule_id == "OP_COVERAGE"]
-    assert op_components, "OP_COVERAGE should have a risk component"
-    # C_ev=1.0 on the empty-desc detail → since it's the only failed detail,
-    # the rule's c_ev should be 1.0
-    assert op_components[0].evidence_coverage == 1.0
+def test_seed_with_empty_evidence_description_raises_at_load(tmp_path, monkeypatch):
+    """rule_db.load_all_regulations refuses an evidence_fallbacks row with
+    empty description — silently auto-curing rules at runtime is worse than
+    blowing up at load."""
+    from app.database import rule_db, schema
+    db_path = str(tmp_path / "bad.db")
+    schema.init_schema(db_path)
+    conn = schema.get_connection(db_path)
+    conn.executescript("""
+        INSERT INTO regulations VALUES ('R', 'r', 0, 'd');
+        INSERT INTO rule_clauses VALUES ('C', 'R', 'd');
+        INSERT INTO trigger_conditions VALUES ('T', 'C', 'prompt_signal', 'CONTAINS', 'X');
+        INSERT INTO kyc_requirements VALUES ('K', 'T', 'f', '==', 't', 'profile');
+        INSERT INTO evidence_fallbacks (evidence_id, kyc_id, description, is_ack)
+            VALUES ('EV_EMPTY', 'K', '', 0);
+    """)
+    conn.commit()
+    conn.close()
+    with pytest.raises(ValueError, match="empty description"):
+        rule_db.load_all_regulations(db_path)
 
 
 # ── REVIEW action skips portfolio risk ──────────────────────────────────────
