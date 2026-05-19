@@ -153,7 +153,16 @@ class ProvidedEvidenceSchema(BaseModel):
     scrap: str = ""
     evidence_path: str = Field(
         default="",
-        description="The specific GraphRAG or document path/link from the retrieved context justifying this evidence. e.g. [GraphRAG ID: FINRA_2111]"
+        description=(
+            "REQUIRED for every non-ACK evidence item: the GraphRAG citation "
+            "from the retrieved knowledge base that grounds this evidence — "
+            "format '[GraphRAG ID: <RULE_ID>]', e.g. '[GraphRAG ID: FINRA_2111]'.  "
+            "The Auditor rejects non-ACK evidence with an empty path (C_ev=0), "
+            "so the trade will not cure without one.  "
+            "OMIT (empty string) only for the three acknowledgment-type evidence "
+            "IDs whose value comes from the user's reply rather than a regulation: "
+            "EVID_RISK_OVERRIDE_ACK, EVID_SUITABILITY_ACK, EVID_CONCENTRATION_ACK."
+        ),
     )
 
 class TradeProposalSchema(BaseModel):

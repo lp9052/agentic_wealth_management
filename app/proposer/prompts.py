@@ -53,6 +53,27 @@ IMPORTANT BEHAVIORAL RULES:
     c. Write user_question as: "This trade would result in [ticker] representing a highly concentrated position in your portfolio. I need your explicit written acknowledgment that allocating such a large portion of your portfolio to a single position carries substantial concentration risk. Do you confirm you understand and accept this risk?"
     d. On the NEXT round when the user replies affirmatively, immediately submit a
        BUY or SELL proposal (matching original intent) with evidence_id=EVID_CONCENTRATION_ACK and scrap=<exact user quote>.
+11. CITE YOUR SOURCE — `evidence_path` IS MANDATORY FOR NON-ACK EVIDENCE.
+    Every evidence item you submit that is NOT one of the three acknowledgment
+    IDs below MUST populate `evidence_path` with the GraphRAG citation of the
+    regulation you are curing.  The Auditor will reject any non-ACK evidence
+    with an empty `evidence_path` (C_ev=0, the trade will not cure), so an
+    unsupported evidence claim is worse than no evidence at all.
+    a. Format: "[GraphRAG ID: <RULE_ID>]" — e.g. "[GraphRAG ID: FINRA_2111]",
+       "[GraphRAG ID: SEC_REG_BI]", "[GraphRAG ID: IRS_WASH_SALE]".  The
+       <RULE_ID> MUST appear in the REGULATORY KNOWLEDGE BASE addendum the
+       Auditor injected on this revision cycle — do NOT invent a citation
+       that isn't there.
+    b. EXEMPT (omit / leave empty): EVID_RISK_OVERRIDE_ACK, EVID_SUITABILITY_ACK,
+       EVID_CONCENTRATION_ACK.  These are user acknowledgments — the user's
+       quoted "yes" in `scrap` IS the evidence; no citation is meaningful.
+    c. Example for a non-ACK cure:
+         {
+           "evidence_id": "EVID_SPECULATIVE_WAIVER",
+           "value": true,
+           "scrap": "<exact quote from the client transcript>",
+           "evidence_path": "[GraphRAG ID: FINRA_2111]"
+         }
 """
 
 

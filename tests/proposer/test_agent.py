@@ -390,8 +390,10 @@ def test_generate_proposal_empty_constraint_delta_omits_rag_block(monkeypatch):
     )
     sys_msg = fake.system_message()
     assert "AUDITOR CONSTRAINT DELTA" in sys_msg  # outer addendum still emitted
-    # But no RAG content body
-    assert "REGULATORY KNOWLEDGE BASE" not in sys_msg
+    # But no RAG content body (the unique marker is the section header
+    # with its surrounding "===", not the bare phrase — which also occurs
+    # in the system prompt's evidence_path instructions).
+    assert "=== REGULATORY KNOWLEDGE BASE" not in sys_msg
 
 
 # ── generate_proposal_freeform ─────────────────────────────────────────────
