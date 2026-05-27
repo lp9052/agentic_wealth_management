@@ -71,6 +71,8 @@ class AgentState(TypedDict):
     # User Simulation (for testing)
     additional_info: str        # Info to inject if revision requested
     info_injected: bool         # Track if simulator has already fired
+    # Evidence persistence across rounds
+    accepted_evidence: list     # Evidence items verified with C_ev > 0
 
 
 # ---------------------------------------------------------------------------
@@ -124,6 +126,21 @@ def proposer_node(state: AgentState) -> dict:
             previous_proposal_context=prev_context,
         )
 
+        # Auto-fill evidence_path when the LLM leaves it empty.
+        # Maps evidence_id → rule_id from the constraint_delta's failed_details
+        # to produce a traceable path for the audit trail.
+        if delta and proposal.provided_evidence:
+            evid_to_rule: dict[str, str] = {}
+            for fd in delta.get("failed_details", []):
+                mid = fd.get("missing_evidence_id", "")
+                rid = fd.get("rule_id", "")
+                if mid and rid:
+                    evid_to_rule[mid] = rid
+            for ev in proposal.provided_evidence:
+                if not ev.evidence_path and ev.evidence_id:
+                    rule = evid_to_rule.get(ev.evidence_id, "UNKNOWN")
+                    ev.evidence_path = f"[USER_INPUT → {rule}/{ev.evidence_id}]"
+
         proposal_text = (
             f"**Action:** {proposal.action}\n"
             f"**Asset:** {proposal.asset_ticker} ({proposal.instrument_type})\n"
@@ -159,7 +176,7 @@ def proposer_node(state: AgentState) -> dict:
                 "rationale": proposal.rationale,
                 "user_question": proposal.user_question,
                 "provided_evidence": [
-                    {"evidence_id": e.evidence_id, "value": e.value, "scrap": e.scrap}
+                    {"evidence_id": e.evidence_id, "value": e.value, "scrap": e.scrap, "evidence_path": e.evidence_path}
                     for e in proposal.provided_evidence
                 ],
             },
@@ -203,9 +220,23 @@ def auditor_node(state: AgentState) -> dict:
             evidence_id=e.get("evidence_id", ""),
             value=e.get("value", False),
             scrap=e.get("scrap", ""),
+            evidence_path=e.get("evidence_path", ""),
         )
         for e in proposal_data.get("provided_evidence", [])
     ]
+
+    # Merge previously-accepted evidence into the current evidence list.
+    # This ensures evidence provided in earlier rounds persists even if the
+    # Proposer LLM doesn't re-emit it in subsequent rounds.
+    current_ev_ids = {e.evidence_id for e in evidence}
+    for prev_ev in state.get("accepted_evidence", []):
+        if prev_ev["evidence_id"] not in current_ev_ids:
+            evidence.append(ProvidedEvidence(
+                evidence_id=prev_ev["evidence_id"],
+                value=prev_ev.get("value", True),
+                scrap=prev_ev.get("scrap", ""),
+                evidence_path=prev_ev.get("evidence_path", ""),
+            ))
 
     trade_proposal = TradeProposal(
         proposal_id=proposal_data.get("proposal_id", ""),
@@ -226,7 +257,7 @@ def auditor_node(state: AgentState) -> dict:
     # so SBCRiskScore.iteration correctly records which loop cycle produced each score.
     user_prompt = state.get("prompt", "")
     current_iteration = state.get("revision_count", 1)
-    delta, audit_risk = evaluate_proposal(
+    delta, audit_risk, evidence_scores = evaluate_proposal(
         trade_proposal, client_state, user_prompt, iteration=current_iteration
     )
 
@@ -281,6 +312,23 @@ def auditor_node(state: AgentState) -> dict:
         audit_entry += f"  Missing Evidence: {delta.missing_evidence_ids}\n"
     prev_log = state.get("history_log") or ""
 
+    # Accumulate accepted evidence (C_ev > 0) for persistence across rounds.
+    prev_accepted = list(state.get("accepted_evidence", []) or [])
+    accepted_ids = {a["evidence_id"] for a in prev_accepted}
+    for ev_id, score in evidence_scores.items():
+        if score > 0 and ev_id not in accepted_ids:
+            # Find the scrap and path from the proposal evidence
+            for pe in trade_proposal.provided_evidence:
+                if pe.evidence_id == ev_id:
+                    prev_accepted.append({
+                        "evidence_id": ev_id,
+                        "value": True,
+                        "scrap": pe.scrap,
+                        "evidence_path": pe.evidence_path,
+                    })
+                    accepted_ids.add(ev_id)
+                    break
+
     return {
         "critique": critique,
         "constraint_delta": delta.to_dict(),
@@ -288,6 +336,7 @@ def auditor_node(state: AgentState) -> dict:
         "fired_rules": delta.failed_rules,
         "risk_scores": new_scores,
         "history_log": prev_log + audit_entry,
+        "accepted_evidence": prev_accepted,
     }
 
 
@@ -380,6 +429,9 @@ def compliance_router(state: AgentState) -> str:
     proposal_action = state.get("proposal_json", {}).get("action", "")
     if proposal_action == "REVIEW":
         if state.get("is_real_time"):
+            return "user_simulator_node"
+        # Automated mode: inject additional_info on REVIEW rounds too
+        if state.get("additional_info") and not state.get("info_injected"):
             return "user_simulator_node"
         return "proposer_node"
 

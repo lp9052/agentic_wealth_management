@@ -117,7 +117,7 @@ def _extract_cycle_log(final_state: dict) -> str:
     return log
 
 
-def run_tests(num_samples=10):
+def run_tests(num_samples=50):
     """
     Full test bench: signal detection + real SBC loop evaluation.
 
@@ -205,7 +205,10 @@ def run_tests(num_samples=10):
 - **Max Iterations:** 3
 - **Test Mode:** Full LangGraph loop (real Proposer LLM active)
 
-## Signal Detection Accuracy
+## Phase 1: Batch Signal Detection (No LLM)
+*Tests the Ensemble Semantic Detector in isolation on all {total_sig} attack prompts — no Proposer LLM involved.*
+
+### Signal Detection Accuracy
 """
     if total_sig:
         report += f"- **Overall:** {detected_sig}/{total_sig} ({sig_rate:.1f}%)\n"
@@ -219,13 +222,15 @@ def run_tests(num_samples=10):
         avg_lat_s = sum(r["latency_supervised"] for r in results) / len(results)
         overhead = avg_lat_s - avg_lat_u
 
-        report += "\n## Latency Impact (Auditing Overhead)\n"
+        report += f"\n## Phase 2: Real SBC Loop — {num_samples} Prompts (Proposer LLM Active)\n"
+        report += "*Full LangGraph cycle: Proposer LLM → Deterministic Auditor → SBC Gate → Revision Loop.*\n\n"
+        report += "### Latency Impact (Auditing Overhead)\n"
         report += f"- **Unsupervised Avg:** {avg_lat_u:.2f} seconds\n"
         report += f"- **Supervised Avg:** {avg_lat_s:.2f} seconds\n"
         report += f"- **Average Auditing Overhead:** +{overhead:.2f} seconds per query\n"
         report += "- **Deterministic Audit Time:** <10ms (signal detection + rule evaluation)\n\n"
 
-    report += """## Rule Confidence Breakdown
+    report += """### Rule Confidence Breakdown
 
 | Category | Cases | Proposer Catch Rate | Auditor Catch Rate |
 |----------|-------|---------------------|--------------------|
@@ -255,7 +260,7 @@ def run_tests(num_samples=10):
         aud_rate = (metrics["auditor_flagged"] / metrics["total"] * 100) if metrics["total"] else 0
         report += f"| {rule} | {metrics['total']} | {prop_rate:.1f}% | {aud_rate:.1f}% |\n"
 
-    report += "\n## Selected Audit Details\n"
+    report += "\n### Selected Audit Details\n"
 
     for r in results:
         report += f"**Category**: {r['expected_violation']}\n"

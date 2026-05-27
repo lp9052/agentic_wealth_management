@@ -388,6 +388,23 @@ def evaluate_proposal(
     # detect_signals calls detect_signals_semantic which runs Steps 1–7.
     signals = detect_signals(prompt)
 
+    # ── Step 3b: Rationale feedback — secondary signal sweep ─────────────────
+    # The Proposer's rationale often restates the violation intent in clean,
+    # unambiguous language (e.g. "client prioritizes upfront commission").
+    # Running signal detection on the rationale catches cases where the noisy
+    # user prompt alone falls below the threshold.
+    rationale = (proposal.rationale or "").strip()
+    if rationale and len(rationale) > 20:
+        rationale_signals = detect_signals(rationale)
+        prompt_signal_set = set(signals)
+        new_from_rationale = [s for s in rationale_signals if s not in prompt_signal_set]
+        if new_from_rationale:
+            signals = signals + new_from_rationale
+            logger.info(
+                "Rationale feedback: %d additional signal(s) from Proposer rationale: %s",
+                len(new_from_rationale), new_from_rationale,
+            )
+
     # Determine if the trade involves a derivative using both the LLM's structured output
     # AND the user prompt as a fallback safety net.
     ticker = proposal.asset_ticker.upper()
@@ -541,8 +558,13 @@ def evaluate_proposal(
         if ev_id in provided_ev_ids:
             scrap = evidence_map.get(ev_id, "").strip()
             if scrap:
-                # Verify scrap is grounded in the user prompt
-                if scrap.lower() in prompt.lower():
+                # Verify scrap is grounded in the user prompt.
+                # Use word-overlap instead of exact substring match because the
+                # Proposer LLM may trim or paraphrase the user quote slightly.
+                scrap_words = set(scrap.lower().split())
+                prompt_words = set(prompt.lower().split())
+                overlap = len(scrap_words & prompt_words) / max(len(scrap_words), 1)
+                if overlap >= 0.6 or scrap.lower() in prompt.lower():
                     # Compute semantic similarity against the evidence description
                     desc = evidence_descriptions.get(ev_id, "")
                     if desc:
@@ -592,6 +614,14 @@ def evaluate_proposal(
         iteration=iteration,
     )
 
+    # Filter out evidence items that have been successfully provided.
+    # An evidence item is "satisfied" if its C_ev score is > 0.
+    # The remaining list drives the Proposer's next-round feedback.
+    remaining_missing = [
+        ev_id for ev_id in all_missing_evidence
+        if evidence_scores.get(ev_id, 0.0) <= 0.0
+    ]
+
     # ── Step 16: SBC Gate routing ────────────────────────────────────────────
     # The audit_risk score is the SOLE determinant of the routing decision.
     # No static severity labels — the math decides.
@@ -610,7 +640,7 @@ def evaluate_proposal(
             audit_risk_score=score,
             gate_decision="HUMAN_ESCALATION",
             failed_rules=sorted(all_failed_rules),
-            missing_evidence_ids=all_missing_evidence,
+            missing_evidence_ids=remaining_missing,
             failed_details=failed_details,
         )
     else:  # REFINEMENT
@@ -619,7 +649,7 @@ def evaluate_proposal(
             audit_risk_score=score,
             gate_decision="REFINEMENT",
             failed_rules=sorted(all_failed_rules),
-            missing_evidence_ids=all_missing_evidence,
+            missing_evidence_ids=remaining_missing,
             failed_details=failed_details,
         )
 
@@ -630,4 +660,4 @@ def evaluate_proposal(
         {k: round(v, 3) for k, v in evidence_scores.items()},
     )
 
-    return delta, audit_risk
+    return delta, audit_risk, evidence_scores

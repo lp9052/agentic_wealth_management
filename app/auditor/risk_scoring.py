@@ -131,6 +131,20 @@ DEFAULT_RULE_WEIGHTS: dict[str, float] = {
 # Fallback weight for rules not in the config
 DEFAULT_OMEGA: float = 0.70
 
+# ── Intent-based rules ──────────────────────────────────────────────────────
+# These rules detect violations in the *nature of the request* — conflict of
+# interest, suitability mismatch, or wash-sale timing patterns — rather than
+# portfolio-level risk that scales with trade size.  When the Proposer outputs
+# a placeholder trade size ($1), the normal TSF formula collapses the risk
+# score to zero.  A minimum TSF floor ensures that signal-detected intent
+# violations always produce a meaningful risk score.
+#
+# This does NOT affect:
+#   - CRITICAL rules (already bypass TSF with TSF=1.0)
+#   - STATIC_PORTFOLIO (portfolio-risk: TSF correctly scales with trade size)
+INTENT_BASED_RULES: set[str] = {"SEC_REG_BI", "FINRA_2111", "IRS_WASH_SALE"}
+TSF_INTENT_FLOOR: float = 0.40
+
 
 def get_rule_weight(rule_id: str) -> float:
     """Get the institution-configured weight for a rule."""
@@ -318,6 +332,18 @@ def compute_audit_risk(
         tsf = _compute_trade_size_factor(
             trade_size_usd, total_equity_usd, is_binary=is_binary
         )
+
+        # Intent-based floor: for rules where the violation is in the *nature*
+        # of the request (not the trade size), ensure TSF never collapses to
+        # zero just because the Proposer output a placeholder trade size.
+        # Only applies to RECOVERABLE (non-binary) rules in the intent set.
+        if not is_binary and rule_id in INTENT_BASED_RULES:
+            if tsf < TSF_INTENT_FLOOR:
+                logger.info(
+                    "Intent-based TSF floor applied for '%s': %.4f → %.4f",
+                    rule_id, tsf, TSF_INTENT_FLOOR,
+                )
+                tsf = TSF_INTENT_FLOOR
 
         # Compute C_ev: min() across all evidence items for this rule.
         # If a detail has no missing_evidence_id (CRITICAL, no fallback),
