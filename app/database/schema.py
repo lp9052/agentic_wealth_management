@@ -35,11 +35,26 @@ def init_schema(db_path: str = DB_PATH) -> None:
     # Regulatory Rule Tables (AST)
     # -----------------------------------------------------------------------
 
+    # Idempotent migration: pre-existing rules.db files have a `severity`
+    # column with a CHECK constraint.  Detect the old shape and drop the
+    # whole rule tree in FK order — the seed re-inserts everything anyway,
+    # and CHECK constraints can't be altered in place under SQLite.
+    existing_tables = {row[0] for row in cursor.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'"
+    ).fetchall()}
+    if "regulations" in existing_tables:
+        reg_cols = {row[1] for row in cursor.execute("PRAGMA table_info(regulations)").fetchall()}
+        if "severity" in reg_cols and "bypass_tsf" not in reg_cols:
+            logger.info("regulations: migrating severity → bypass_tsf (drop + reseed required).")
+            for t in ("evidence_fallbacks", "kyc_requirements", "trigger_conditions",
+                     "rule_clauses", "regulations"):
+                cursor.execute(f"DROP TABLE IF EXISTS {t}")
+
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS regulations (
             rule_id TEXT PRIMARY KEY,
             rule_name TEXT NOT NULL,
-            severity TEXT NOT NULL CHECK(severity IN ('CRITICAL', 'RECOVERABLE')),
+            bypass_tsf INTEGER NOT NULL DEFAULT 0,
             description TEXT
         )
     """)
@@ -77,9 +92,27 @@ def init_schema(db_path: str = DB_PATH) -> None:
         CREATE TABLE IF NOT EXISTS evidence_fallbacks (
             evidence_id TEXT PRIMARY KEY,
             kyc_id TEXT NOT NULL REFERENCES kyc_requirements(kyc_id),
-            description TEXT
+            description TEXT,
+            is_ack INTEGER NOT NULL DEFAULT 0
         )
     """)
+
+    # Idempotent migration: pre-existing DBs created before is_ack was added
+    # get the column injected with the default 0.  The seed (or the
+    # _ACK_EVIDENCE_IDS UPDATE below) then sets it to 1 where appropriate.
+    existing_cols = {row[1] for row in cursor.execute("PRAGMA table_info(evidence_fallbacks)").fetchall()}
+    if "is_ack" not in existing_cols:
+        cursor.execute("ALTER TABLE evidence_fallbacks ADD COLUMN is_ack INTEGER NOT NULL DEFAULT 0")
+        logger.info("evidence_fallbacks: added is_ack column (migration).")
+
+    # Backfill is_ack=1 for the canonical client-acknowledgment evidence so
+    # any DB — freshly seeded or evolved — agrees with the EvidenceFallback
+    # contract.  Idempotent: re-running is a no-op once values are set.
+    _ACK_EVIDENCE_IDS = ("EVID_RISK_OVERRIDE_ACK", "EVID_SUITABILITY_ACK", "EVID_CONCENTRATION_ACK")
+    cursor.execute(
+        "UPDATE evidence_fallbacks SET is_ack=1 WHERE evidence_id IN (?, ?, ?) AND is_ack=0",
+        _ACK_EVIDENCE_IDS,
+    )
 
     # -----------------------------------------------------------------------
     # Client State Tables

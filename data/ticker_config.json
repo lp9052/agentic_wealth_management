@@ -2,10 +2,10 @@
   "_comment": "Unified ticker configuration. Replaces hard-coded SAFE_TICKERS and is_blue_chip checks.",
 
   "tickers": {
-    "SPY":   { "suppress_signals": ["HIGH_RISK_PRODUCT", "SPECULATIVE_PRODUCT", "NON_STANDARD_REQUEST"], "note": "S&P 500 ETF — broad market index" },
-    "VOO":   { "suppress_signals": ["HIGH_RISK_PRODUCT", "SPECULATIVE_PRODUCT", "NON_STANDARD_REQUEST"], "note": "Vanguard S&P 500 ETF" },
-    "VTI":   { "suppress_signals": ["HIGH_RISK_PRODUCT", "SPECULATIVE_PRODUCT", "NON_STANDARD_REQUEST"], "note": "Vanguard Total Market ETF" },
-    "IVV":   { "suppress_signals": ["HIGH_RISK_PRODUCT", "SPECULATIVE_PRODUCT", "NON_STANDARD_REQUEST"], "note": "iShares Core S&P 500 ETF" },
+    "SPY":   { "suppress_signals": ["HIGH_RISK_PRODUCT", "SPECULATIVE_PRODUCT"], "note": "S&P 500 ETF — broad market index" },
+    "VOO":   { "suppress_signals": ["HIGH_RISK_PRODUCT", "SPECULATIVE_PRODUCT"], "note": "Vanguard S&P 500 ETF" },
+    "VTI":   { "suppress_signals": ["HIGH_RISK_PRODUCT", "SPECULATIVE_PRODUCT"], "note": "Vanguard Total Market ETF" },
+    "IVV":   { "suppress_signals": ["HIGH_RISK_PRODUCT", "SPECULATIVE_PRODUCT"], "note": "iShares Core S&P 500 ETF" },
     "QQQ":   { "suppress_signals": ["HIGH_RISK_PRODUCT", "SPECULATIVE_PRODUCT"], "note": "Nasdaq-100 ETF — tech-weighted" },
     "AAPL":  { "suppress_signals": ["HIGH_RISK_PRODUCT", "SPECULATIVE_PRODUCT"], "note": "Apple Inc." },
     "MSFT":  { "suppress_signals": ["HIGH_RISK_PRODUCT", "SPECULATIVE_PRODUCT"], "note": "Microsoft Corp." },

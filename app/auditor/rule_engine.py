@@ -1,15 +1,28 @@
 """
 Deterministic Rule Engine — Core of the compliance pipeline.
 
-Pipeline stages handled here:
-  Step 2 : Static portfolio checks   — funds, holdings, AML/KYC, concentration
-  Step 3 : Signal detection          — semantic embeddings vs anchors (imported)
-  Step 4 : Ticker-context tagging    — tag is_derivative & suppress false-positive signals
-  Step 5 : Cascading audit setup     — dynamically resolve adjacency from regulations.json
-  Step 6 : Regulatory evaluation     — trigger match → KYC gate → collect evidence reqs
-  Step 7 : Evidence scoring          — continuous C_ev via ensemble embedding model
-  Step 8 : Audit risk scoring        — SBC authoritative composite score (TSF)
-  Step 9 : SBC Gate routing          — score-driven: AUTO_APPROVE / REFINEMENT / HUMAN_ESCALATION
+Flow of evaluate_proposal():
+  1. Static portfolio checks      — deterministic arithmetic, fail-fast
+                                    (funds, holdings, AML/KYC, concentration)
+  2. Signal detection             — semantic embeddings vs anchors
+                                    (delegated to signal_detector)
+  3. Derivative classification    — instrument_type membership + prompt markers,
+                                    used to gate per-ticker signal suppression
+  4. Regulatory rule evaluation   — single walk over the regulations AST:
+                                      * harvests evidence_descriptions /
+                                        evidence_is_ack lookup map
+                                      * matches TriggerConditions against the
+                                        proposal + detected signals
+                                      * evaluates KYCRequirements against
+                                        client_state, collects failures
+                                      * second-level cascade via adjacency map
+  5. Evidence coverage (C_ev)     — for each provided evidence scrap, semantic
+                                    similarity vs the canonical description;
+                                    ACK fast-path for affirmative replies
+  6. Composite audit risk         — TSF · (1 − C_ev) · ω, complement-product
+                                    (delegated to risk_scoring)
+  7. SBC gate routing             — score → AUTO_APPROVE / REFINEMENT /
+                                    HUMAN_ESCALATION → ConstraintDelta
 
 No LLM calls. No probabilistic reasoning. Pure logic + semantic math.
 """
@@ -17,15 +30,17 @@ No LLM calls. No probabilistic reasoning. Pure logic + semantic math.
 import json
 import logging
 import os
+import re
 from typing import Optional
 
 from app.auditor.models import (
-    ConstraintDelta, FailedRuleDetail, TradeProposal, Severity,
+    ConstraintDelta, FailedRuleDetail, TradeProposal,
     TriggerOperator, KYCOperator, TriggerCondition, KYCRequirement,
+    DERIVATIVE_INSTRUMENT_TYPES,
 )
 from app.auditor.rule_registry import get_regulations
 from app.auditor.risk_scoring import (
-    compute_audit_risk, SBCRiskScore,
+    compute_audit_risk, SBCRiskScore, get_rule_weight,
 )
 from app.auditor.signal_detector import detect_signals, get_embedding_similarity
 
@@ -40,8 +55,33 @@ _REGULATIONS_PATH = os.path.normpath(
 )
 
 
+# Affirmative replies that satisfy a client-acknowledgment evidence item
+# (used by _score_evidence_coverage's ACK fast-path).  Module-level so we
+# don't reallocate the set on every C_ev iteration.
+AFFIRMATIVE_KEYWORDS: frozenset[str] = frozenset({
+    "yes", "yep", "sure", "understand", "agree", "confirm", "proceed", "acknowledge",
+})
+
+
+def _scrap_is_grounded(scrap: str, prompt: str) -> bool:
+    """
+    Word-boundary check that the scrap actually appears in the prompt.
+
+    Plain substring matching is too loose — a scrap of "user" matches inside
+    "username".  We compare on a normalised, word-boundary-tokenised form:
+    every contiguous run of word characters in the scrap must appear as a
+    word-boundary match in the prompt, in order.  Non-word chars in the
+    scrap (punctuation, whitespace) don't have to match anything.
+    """
+    scrap_words = re.findall(r"\w+", scrap.lower())
+    if not scrap_words:
+        return False
+    pattern = r"\b" + r"\W+".join(re.escape(w) for w in scrap_words) + r"\b"
+    return re.search(pattern, prompt.lower()) is not None
+
+
 # ===========================================================================
-# Step 8a: Ticker Configuration  (loaded once, cached)
+# Ticker Configuration  (loaded once, cached)
 # ===========================================================================
 
 _ticker_config_cache: Optional[dict] = None
@@ -84,7 +124,7 @@ def get_derivative_markers() -> list[str]:
 
 
 # ===========================================================================
-# Step 12a: Adjacency / Cascading Audit  (loaded once from regulations.json)
+# Adjacency / Cascading Audit  (loaded once from regulations.json)
 # ===========================================================================
 
 _adjacent_risks_cache: Optional[dict[str, list[str]]] = None
@@ -121,12 +161,23 @@ def get_adjacent_risks() -> dict[str, list[str]]:
 
 
 # ===========================================================================
-# Step 11: Static Portfolio & Proposal Validation Checks
+# Static Portfolio & Proposal Validation Checks
 # ===========================================================================
 
 VALID_ACTIONS = {"BUY", "SELL", "HOLD", "REVIEW"}
-MAX_SINGLE_TRADE_USD = 10_000_000   # $10 M single-trade ceiling
-CONCENTRATION_LIMIT = 0.50          # Max 50 % of portfolio in one position
+MAX_SINGLE_TRADE_USD = 10_000_000   # $10 M single-trade ceiling (bypass_tsf — firm-level cap)
+CONCENTRATION_LIMIT = 0.50          # Concentration trigger threshold (51 %+ fires the rule)
+
+# Concentration dynamic-weight fusion: linear lerp from the rule-level
+# institutional weight (the floor) to 1.0 (full concentration ceiling).
+#     ω(post_pct) = ω_rule + (1.0 − ω_rule) · overage_fraction
+#       overage_fraction = (post_pct − CONCENTRATION_LIMIT) / (1 − CONCENTRATION_LIMIT)
+# The floor IS the rule weight — no magic constant.  When an institution
+# tightens DEFAULT_RULE_WEIGHTS["STATIC_PORTFOLIO"], the concentration
+# baseline moves with it.  With ω_rule = 0.85 today:
+#   At 51 %: ω ≈ 0.85 → REFINEMENT (TSF<1 keeps R below ESCALATE for most trades).
+#   At 75 %: ω ≈ 0.925 → REFINEMENT / ESCALATION at TSF=1.
+#   At 100 %: ω = 1.00 → ESCALATION at any TSF.
 
 
 def run_static_checks(
@@ -154,7 +205,7 @@ def run_static_checks(
     if action not in VALID_ACTIONS:
         failures.append(FailedRuleDetail(
             rule_id="STATIC_PORTFOLIO", clause_id="STATIC.00",
-            severity=Severity.CRITICAL,
+            bypass_tsf=True,
             description=f"Invalid action '{proposal.action}'. Must be one of: {VALID_ACTIONS}",
         ))
         return failures
@@ -168,7 +219,7 @@ def run_static_checks(
     if not ticker or ticker == "UNKNOWN" or len(ticker) > 10:
         failures.append(FailedRuleDetail(
             rule_id="STATIC_PORTFOLIO", clause_id="STATIC.00",
-            severity=Severity.CRITICAL,
+            bypass_tsf=True,
             description=f"Invalid or missing ticker symbol: '{proposal.asset_ticker}'",
         ))
 
@@ -176,7 +227,7 @@ def run_static_checks(
     if proposal.trade_size_usd < 0:
         failures.append(FailedRuleDetail(
             rule_id="STATIC_PORTFOLIO", clause_id="STATIC.00",
-            severity=Severity.CRITICAL,
+            bypass_tsf=True,
             description=f"Negative trade size: ${proposal.trade_size_usd:,.2f}",
         ))
 
@@ -184,7 +235,7 @@ def run_static_checks(
     if proposal.trade_size_usd > MAX_SINGLE_TRADE_USD:
         failures.append(FailedRuleDetail(
             rule_id="STATIC_PORTFOLIO", clause_id="STATIC.03",
-            severity=Severity.CRITICAL,
+            bypass_tsf=True,
             description=(
                 f"Trade size ${proposal.trade_size_usd:,.2f} exceeds the single-trade "
                 f"ceiling of ${MAX_SINGLE_TRADE_USD:,.2f}"
@@ -196,13 +247,13 @@ def run_static_checks(
     if not acct.get("kyc_verified", True):
         failures.append(FailedRuleDetail(
             rule_id="STATIC_PORTFOLIO", clause_id="STATIC.04",
-            severity=Severity.CRITICAL,
+            bypass_tsf=True,
             description="Account not KYC-verified. All trading is blocked until verification completes.",
         ))
     if not acct.get("aml_ofac_cleared", True):
         failures.append(FailedRuleDetail(
             rule_id="STATIC_PORTFOLIO", clause_id="STATIC.04",
-            severity=Severity.CRITICAL,
+            bypass_tsf=True,
             description="Account has not passed AML/OFAC screening. All trading is blocked.",
         ))
 
@@ -217,34 +268,55 @@ def run_static_checks(
     total_portfolio = acct.get("total_portfolio_value", total_equity)
 
     if action == "BUY":
-        # STATIC.01 — Insufficient funds
-        if total_equity > 0 and proposal.trade_size_usd > total_equity:
+        # STATIC.01 — Insufficient funds.  No `total_equity > 0` guard:
+        # a zero-equity client buying anything positive IS insufficient
+        # funds, and silently skipping the check would let the trade
+        # cascade into a div-by-zero in the TSF math downstream.
+        if proposal.trade_size_usd > total_equity:
             failures.append(FailedRuleDetail(
                 rule_id="STATIC_PORTFOLIO", clause_id="STATIC.01",
-                severity=Severity.CRITICAL,
+                bypass_tsf=True,
                 description=(
                     f"Insufficient funds: trade requires ${proposal.trade_size_usd:,.2f} "
                     f"but client equity is ${total_equity:,.2f}"
                 ),
             ))
 
-        # STATIC.05 — Concentration risk
-        if total_portfolio > 0 and ticker:
+        # STATIC.05 — Concentration risk (continuous SBC severity).
+        # Fires when post-trade fraction crosses CONCENTRATION_LIMIT; the
+        # dynamic weight fuses the institutional rule weight (floor) with
+        # the post-trade concentration (lerps toward 1.0 at full
+        # concentration).  See module-level constants for the formula.
+        # Zero-portfolio is treated as full concentration (post_pct=1.0):
+        # any positive trade on nothing IS 100% concentration, and that's
+        # what the math should say.  Insufficient funds also fires and
+        # dominates the composite, but concentration scores correctly too.
+        if ticker:
             existing = sum(
                 h.get("value", 0) for h in assets
                 if ticker in h.get("asset", "").upper()
             )
-            # No new cash is being deposited, so denominator is just total_portfolio
-            post_pct = (existing + proposal.trade_size_usd) / total_portfolio
+            if total_portfolio > 0:
+                post_pct = (existing + proposal.trade_size_usd) / total_portfolio
+            else:
+                post_pct = 1.0
             if post_pct > CONCENTRATION_LIMIT:
+                overage_fraction = min(
+                    (post_pct - CONCENTRATION_LIMIT) / (1.0 - CONCENTRATION_LIMIT),
+                    1.0,
+                )
+                rule_weight = get_rule_weight("STATIC_PORTFOLIO")
+                dynamic_weight = rule_weight + (1.0 - rule_weight) * overage_fraction
                 failures.append(FailedRuleDetail(
                     rule_id="STATIC_PORTFOLIO", clause_id="STATIC.05",
-                    severity=Severity.RECOVERABLE,
                     description=(
                         f"Concentration risk: post-trade {ticker} position would be "
-                        f"{post_pct:.0%} of the total portfolio value (limit: {CONCENTRATION_LIMIT:.0%})"
+                        f"{post_pct:.0%} of the total portfolio value "
+                        f"(limit: {CONCENTRATION_LIMIT:.0%}, ω={dynamic_weight:.2f})"
                     ),
-                    missing_evidence_id="EVID_CONCENTRATION_ACK"
+                    missing_evidence_id="EVID_CONCENTRATION_ACK",
+                    is_ack=True,
+                    weight=dynamic_weight,
                 ))
 
     elif action == "SELL" and ticker:
@@ -256,7 +328,7 @@ def run_static_checks(
         if held <= 0:
             failures.append(FailedRuleDetail(
                 rule_id="STATIC_PORTFOLIO", clause_id="STATIC.02",
-                severity=Severity.CRITICAL,
+                bypass_tsf=True,
                 description=(
                     f"Insufficient holdings: client does not hold {ticker} "
                     f"or has zero value in this position"
@@ -265,7 +337,7 @@ def run_static_checks(
         elif proposal.trade_size_usd > held:
             failures.append(FailedRuleDetail(
                 rule_id="STATIC_PORTFOLIO", clause_id="STATIC.02",
-                severity=Severity.CRITICAL,
+                bypass_tsf=True,
                 description=(
                     f"Insufficient holdings: trade requires ${proposal.trade_size_usd:,.2f} "
                     f"but client holds only ${held:,.2f} of {ticker}"
@@ -276,20 +348,40 @@ def run_static_checks(
 
 
 # ===========================================================================
-# Step 13: Rule Evaluation Helpers
+# Rule Evaluation Helpers
 # ===========================================================================
 
 def _trigger_matches(condition: TriggerCondition, proposal: TradeProposal) -> bool:
-    """Check if a trigger condition matches the proposal fields."""
+    """Check if a trigger condition matches the proposal fields.
+
+    Supported (trigger_field, trigger_operator) combinations:
+      prompt_signal × {CONTAINS, EQUALS} → trigger_value must appear in
+                                            proposal.prompt_signals
+      prompt_signal × EXISTS              → any signal at all is present;
+                                            trigger_value is ignored
+      proposal.action × EQUALS            → exact match (case-insensitive)
+      proposal.action × IN                → action ∈ comma-list of allowed
+      proposal.action × EXISTS            → action is non-empty
+      proposal.asset_ticker × EXISTS      → ticker is non-empty
+    """
     if condition.trigger_field == "prompt_signal":
         if condition.trigger_operator in (TriggerOperator.CONTAINS, TriggerOperator.EQUALS):
             return condition.trigger_value in proposal.prompt_signals
+        elif condition.trigger_operator == TriggerOperator.EXISTS:
+            # "Any signal fired" — useful for catch-all rules that escalate
+            # whenever the semantic detector flags anything at all.
+            return len(proposal.prompt_signals) > 0
     elif condition.trigger_field == "proposal.action":
         if condition.trigger_operator == TriggerOperator.EQUALS:
             return proposal.action.upper() == condition.trigger_value.upper()
         elif condition.trigger_operator == TriggerOperator.IN:
             allowed = [v.strip().strip("'\"") for v in condition.trigger_value.strip("[]").split(",")]
             return proposal.action.upper() in [a.upper() for a in allowed]
+        elif condition.trigger_operator == TriggerOperator.EXISTS:
+            return bool(proposal.action)
+    elif condition.trigger_field == "proposal.asset_ticker":
+        if condition.trigger_operator == TriggerOperator.EXISTS:
+            return bool((proposal.asset_ticker or "").strip())
     return False
 
 
@@ -351,7 +443,75 @@ def _kyc_passes(kyc: KYCRequirement, client_state: dict, is_forced: bool = False
         from app.auditor.signal_detector import get_embedding_similarity as _sim
         return _sim(str_v, threshold) >= 0.60
 
+    # Reachable when an op + value-type combination has no handler.  Example:
+    # LESS_THAN / GREATER_THAN on a non-numeric value — bool block skips
+    # (operator isn't EQUALS/NOT_EQUALS), numeric block catches the
+    # ValueError on float() and falls through, string block doesn't define
+    # < / >.  The conservative default is "pass" (no violation): a
+    # misconfigured rule shouldn't trigger false escalations, and the
+    # misconfig will surface in the audit log because the rule's other
+    # KYCs will continue to be evaluated.
     return True
+
+
+def _score_evidence_coverage(
+    ev_id: str,
+    scrap: str,
+    description: str,
+    prompt: str,
+    is_ack: bool,
+    evidence_path: str = "",
+) -> float:
+    """
+    Compute C_ev ∈ [0, 1] for a single provided evidence item.
+
+    Decision order:
+      * empty scrap                        → 0.0
+      * scrap not grounded in user prompt  → 0.0  (warned — possible LLM hallucination)
+      * non-ACK AND empty evidence_path    → 0.0  (cite-your-source: any
+                                                   semantic cure must point at
+                                                   a known rule via its GraphRAG
+                                                   id; ACKs don't need a citation
+                                                   since the user's "yes" IS the
+                                                   evidence)
+      * is_ack AND scrap is affirmative    → 1.0  (ACK fast-path — "yes" wouldn't
+                                                   embed-match a 20-word legal phrase)
+      * otherwise                          → semantic similarity from the ensemble model
+    """
+    if not scrap:
+        return 0.0
+
+    if not _scrap_is_grounded(scrap, prompt):
+        logger.warning("Evidence grounding FAILED for %s: scrap=%r not in prompt", ev_id, scrap)
+        return 0.0
+
+    # description is guaranteed non-empty: rule_db.load_all_regulations
+    # rejects empty AST descriptions; run_static_checks always emits a
+    # human-readable description on every FailedRuleDetail that carries a
+    # missing_evidence_id.
+
+    if is_ack and any(k in scrap.lower() for k in AFFIRMATIVE_KEYWORDS):
+        logger.info("Evidence '%s': Fast-path ACK match for scrap=%r", ev_id, scrap)
+        return 1.0
+
+    # Cite-your-source: semantic-similarity cures require a GraphRAG citation
+    # so the audit trail can verify the proposer pulled from the right rule.
+    # An empty path on a non-ACK evidence is a sign the LLM hallucinated the
+    # cure without consulting the knowledge base.
+    if not evidence_path.strip():
+        logger.warning(
+            "Evidence '%s': non-ACK evidence has empty evidence_path; "
+            "rejecting as unsupported (scrap=%r)",
+            ev_id, scrap,
+        )
+        return 0.0
+
+    sim = max(get_embedding_similarity(scrap, description), 0.0)
+    logger.info(
+        "Evidence '%s': C_ev = %.3f (scrap=%r vs desc=%r, path=%r)",
+        ev_id, sim, scrap[:60], description[:60], evidence_path,
+    )
+    return sim
 
 
 # ===========================================================================
@@ -365,7 +525,7 @@ def evaluate_proposal(
     iteration: int = 1,
 ) -> tuple[ConstraintDelta, SBCRiskScore]:
     """
-    Run the full 15-step compliance evaluation.
+    Run the full compliance evaluation — see module docstring for the 7-step flow.
 
     Args:
         proposal   : Structured trade proposal from the LLM Proposer.
@@ -381,41 +541,23 @@ def evaluate_proposal(
     trade_size = proposal.trade_size_usd
     total_equity = client_state.get("account_state", {}).get("total_equity_usd", 0.0)
 
-    # ── Step 1: Static portfolio checks (Fail Fast) ──────────────────────────
+    # ── 1. Static portfolio checks (deterministic arithmetic) ────────────────
     static_failures = run_static_checks(proposal, client_state)
 
-    # ── Steps 3–7: Run signal detection (Typo filter is handled upstream) ────
-    # detect_signals calls detect_signals_semantic which runs Steps 1–7.
+    # ── 2. Signal detection (semantic embeddings vs anchors) ─────────────────
     signals = detect_signals(prompt)
 
-    # ── Step 3b: Rationale feedback — secondary signal sweep ─────────────────
-    # The Proposer's rationale often restates the violation intent in clean,
-    # unambiguous language (e.g. "client prioritizes upfront commission").
-    # Running signal detection on the rationale catches cases where the noisy
-    # user prompt alone falls below the threshold.
-    rationale = (proposal.rationale or "").strip()
-    if rationale and len(rationale) > 20:
-        rationale_signals = detect_signals(rationale)
-        prompt_signal_set = set(signals)
-        new_from_rationale = [s for s in rationale_signals if s not in prompt_signal_set]
-        if new_from_rationale:
-            signals = signals + new_from_rationale
-            logger.info(
-                "Rationale feedback: %d additional signal(s) from Proposer rationale: %s",
-                len(new_from_rationale), new_from_rationale,
-            )
-
-    # Determine if the trade involves a derivative using both the LLM's structured output
-    # AND the user prompt as a fallback safety net.
+    # ── 3. Derivative classification + per-ticker signal suppression ─────────
+    # is_derivative gates suppression: blue-chip tickers like SPY suppress
+    # noisy HIGH_RISK_PRODUCT / SPECULATIVE_PRODUCT signals, but a derivative
+    # on the same ticker (e.g. SPY 0DTE calls) is genuinely risky and must
+    # keep those signals.  Two paths cover the proposer's structured field
+    # and a prompt-keyword fallback for cases where the LLM mis-tagged it.
     ticker = proposal.asset_ticker.upper()
-    derivative_markers = get_derivative_markers()
     is_derivative = (
-        proposal.instrument_type.upper() == "OPTION" or
-        any(m in prompt.lower() for m in derivative_markers)
+        proposal.instrument_type.upper().strip() in DERIVATIVE_INSTRUMENT_TYPES
+        or any(m in prompt.lower() for m in get_derivative_markers())
     )
-
-    # ── Step 9: Signal suppression (single unified pass) ─────────────────────
-    # Load per-ticker suppress list from config; apply only when NOT derivative.
     suppress_set = get_suppress_signals_for_ticker(ticker)
     if suppress_set and not is_derivative:
         before = set(signals)
@@ -426,186 +568,125 @@ def evaluate_proposal(
                 "Signal suppression for %s (non-derivative): removed %s",
                 ticker, suppressed,
             )
-
     proposal.prompt_signals = signals
 
-    # ── Step 12: Cascading audit setup ───────────────────────────────────────
-    # Load adjacency exclusively from regulations.json (no hardcoded fallback).
+    # ── 4. Regulatory rule evaluation (single AST walk) ──────────────────────
+    # One pass does three things at once:
+    #   * harvests the evidence-description / is_ack lookup map used by C_ev
+    #   * matches trigger conditions against the proposal + detected signals
+    #   * evaluates KYC requirements, emitting FailedRuleDetail per violation
+    # STATIC_PORTFOLIO clauses are visited only for their evidence fallbacks
+    # — the checks themselves live in run_static_checks above.  Adjacency
+    # cascades populate forced_evaluations mid-walk; rules later in the
+    # iteration order see them as is_forced=True.
     adjacent_risks = get_adjacent_risks()
-
-    forced_evaluations: set[str] = set()   # Rules to force-evaluate (bypass trigger)
-
-    for sig in signals:
-        # Normal signal: full cascade
-        if sig in adjacent_risks:
-            forced_evaluations.update(adjacent_risks[sig])
-
-    # ── Steps 13: Regulatory rule evaluation ─────────────────────────────────
-    regulations = get_regulations()
-
-    # Build a lookup of evidence_id → fallback description text during rule traversal.
-    # This avoids a second iteration of the regulations list later in Step 14.
-    evidence_descriptions: dict[str, str] = {}
-    for reg in regulations:
-        for clause in reg.clauses:
-            for cond in clause.conditions:
-                for kyc in cond.kyc_requirements:
-                    if kyc.fallback:
-                        evidence_descriptions[kyc.fallback.evidence_id] = kyc.fallback.description
-    
-    # ── Map provided evidence ────────────────────────────────────────────────
-    evidence_map = {e.evidence_id: e.scrap for e in proposal.provided_evidence}
-    provided_ev_ids = {e.evidence_id for e in proposal.provided_evidence if e.value}
-    historical_evidence = client_state.get("historical_evidence", [])
-    if isinstance(historical_evidence, list):
-        provided_ev_ids.update(str(e) for e in historical_evidence)
-
-    # ── Process static failures ─────────────────────────────────────────────
-    # Static failures are collected as-is.  Evidence curing is handled
-    # via the continuous C_ev score in the risk computation — not by
-    # removing failures from the list.
+    forced_evaluations: set[str] = set()
     failed_details: list[FailedRuleDetail] = list(static_failures)
+    all_failed_rules: set[str] = {"STATIC_PORTFOLIO"} if failed_details else set()
+    evidence_descriptions: dict[str, str] = {}
+    evidence_is_ack: dict[str, bool] = {}
 
-    # Extract missing evidence IDs from static failures
-    all_missing_evidence: list[str] = [
-        f.missing_evidence_id for f in failed_details if f.missing_evidence_id
-    ]
-
-    all_failed_rules: set[str] = set()
-
-    if failed_details:
-        all_failed_rules.add("STATIC_PORTFOLIO")
-
-    for reg in regulations:
-        if reg.rule_id == "STATIC_PORTFOLIO":
-            continue  # Already handled in Step 11
-
+    for reg in get_regulations():
+        is_static = (reg.rule_id == "STATIC_PORTFOLIO")
         is_forced = reg.rule_id in forced_evaluations
 
         for clause in reg.clauses:
             for condition in clause.conditions:
+                # Harvest evidence map for every clause (incl. STATIC_PORTFOLIO,
+                # whose EVID_CONCENTRATION_ACK fallback we need below).
+                for kyc in condition.kyc_requirements:
+                    if kyc.fallback:
+                        evidence_descriptions[kyc.fallback.evidence_id] = kyc.fallback.description
+                        evidence_is_ack[kyc.fallback.evidence_id] = kyc.fallback.is_ack
+
+                if is_static:
+                    continue
                 if not (is_forced or _trigger_matches(condition, proposal)):
                     continue
 
                 for kyc in condition.kyc_requirements:
-                    # Force-evals skip intent-based checks (proposal_check domain)
-                    # — those only make sense when triggered by actual user content
+                    # Forced rules skip intent-based checks (proposal_check
+                    # domain) — those only make sense when triggered by actual
+                    # user content, not by adjacency.
                     if is_forced and kyc.domain == "proposal_check":
                         continue
-
                     if _kyc_passes(kyc, client_state, is_forced=is_forced):
                         continue
 
-                    # KYC failed → violation
                     all_failed_rules.add(reg.rule_id)
 
-                    # Second-level cascade
-                    if reg.rule_id in adjacent_risks:
-                        new_cascades = [
-                            r for r in adjacent_risks[reg.rule_id]
-                            if r not in forced_evaluations
-                        ]
+                    # Second-level cascade — adds rules to forced_evaluations
+                    # to be picked up later in this same walk.
+                    new_cascades = [
+                        r for r in adjacent_risks.get(reg.rule_id, [])
+                        if r not in forced_evaluations
+                    ]
+                    if new_cascades:
                         forced_evaluations.update(new_cascades)
-                        if new_cascades:
-                            logger.info(
-                                "Rule '%s' failed → cascading to: %s",
-                                reg.rule_id, new_cascades,
-                            )
+                        logger.info("Rule '%s' failed → cascading to: %s", reg.rule_id, new_cascades)
 
-                    if reg.severity == Severity.CRITICAL:
+                    if reg.bypass_tsf:
                         failed_details.append(FailedRuleDetail(
                             rule_id=reg.rule_id, clause_id=clause.clause_id,
-                            severity=Severity.CRITICAL,
-                            description=f"CRITICAL: {clause.description}",
+                            bypass_tsf=True,
+                            description=f"ABSOLUTE: {clause.description}",
+                        ))
+                    elif kyc.fallback:
+                        failed_details.append(FailedRuleDetail(
+                            rule_id=reg.rule_id, clause_id=clause.clause_id,
+                            description=(
+                                f"GRADED: {clause.description}. "
+                                f"Required: {kyc.fallback.description}"
+                            ),
+                            missing_evidence_id=kyc.fallback.evidence_id,
                         ))
                     else:
-                        if kyc.fallback:
-                            all_missing_evidence.append(kyc.fallback.evidence_id)
-                            failed_details.append(FailedRuleDetail(
-                                rule_id=reg.rule_id, clause_id=clause.clause_id,
-                                severity=Severity.RECOVERABLE,
-                                description=(
-                                    f"RECOVERABLE: {clause.description}. "
-                                    f"Required: {kyc.fallback.description}"
-                                ),
-                                missing_evidence_id=kyc.fallback.evidence_id,
-                            ))
-                        else:
-                            failed_details.append(FailedRuleDetail(
-                                rule_id=reg.rule_id, clause_id=clause.clause_id,
-                                severity=Severity.RECOVERABLE,
-                                description=f"RECOVERABLE: {clause.description}",
-                            ))
+                        failed_details.append(FailedRuleDetail(
+                            rule_id=reg.rule_id, clause_id=clause.clause_id,
+                            description=f"GRADED: {clause.description}",
+                        ))
 
-    # ── Step 14: Compute continuous evidence scores (C_ev) ───────────────
-    # For each missing evidence item, compute the semantic similarity between
-    # the provided scrap and the evidence fallback description using the
-    # ensemble embedding model.  This produces a continuous C_ev ∈ [0, 1]
-    # instead of a binary provided/not-provided check.
-    #
-    # The evidence_scores dict maps evidence_id → similarity score.
-    # When a rule requires multiple evidence items, compute_audit_risk
-    # uses min(scores) as the rule's C_ev (weakest link).
-    evidence_scores: dict[str, float] = {}
-
-    # Also add static check evidence descriptions not covered by regulations
+    # Static-check evidence proxy: when a static failure references an
+    # evidence_id that the AST doesn't declare, fall back to the failure's
+    # own description for similarity comparison.
     for f in static_failures:
         if f.missing_evidence_id and f.missing_evidence_id not in evidence_descriptions:
-            # Use the failure description as a proxy
             evidence_descriptions[f.missing_evidence_id] = f.description
+            evidence_is_ack[f.missing_evidence_id] = f.is_ack
 
+    # Derived from failed_details — single source of truth, no parallel list.
+    all_missing_evidence = [f.missing_evidence_id for f in failed_details if f.missing_evidence_id]
+
+    # ── 5. Evidence coverage (C_ev) ──────────────────────────────────────────
+    # For each missing-evidence item the proposer claims to have provided,
+    # compute a continuous C_ev ∈ [0, 1].  When a rule has multiple required
+    # evidence items, compute_audit_risk takes min(scores) as the rule's
+    # C_ev (weakest link).
+    evidence_map = {e.evidence_id: (e.scrap, e.evidence_path)
+                    for e in proposal.provided_evidence}
+    provided_ev_ids = {e.evidence_id for e in proposal.provided_evidence if e.value}
+
+    evidence_scores: dict[str, float] = {}
     for ev_id in set(all_missing_evidence):
-        if ev_id in provided_ev_ids:
-            scrap = evidence_map.get(ev_id, "").strip()
-            if scrap:
-                # Verify scrap is grounded in the user prompt.
-                # Use word-overlap instead of exact substring match because the
-                # Proposer LLM may trim or paraphrase the user quote slightly.
-                scrap_words = set(scrap.lower().split())
-                prompt_words = set(prompt.lower().split())
-                overlap = len(scrap_words & prompt_words) / max(len(scrap_words), 1)
-                if overlap >= 0.6 or scrap.lower() in prompt.lower():
-                    # Compute semantic similarity against the evidence description
-                    desc = evidence_descriptions.get(ev_id, "")
-                    if desc:
-                        # Fast-path for explicit user acknowledgments.
-                        # Comparing "yes" to a 20-word legal description yields very low semantic similarity.
-                        affirmative_keywords = {"yes", "yep", "sure", "understand", "agree", "confirm", "proceed", "acknowledge"}
-                        if ev_id.endswith("_ACK") and any(k in scrap.lower() for k in affirmative_keywords):
-                            sim = 1.0
-                            logger.info("Evidence '%s': Fast-path ACK match for scrap=%r", ev_id, scrap)
-                        else:
-                            sim = get_embedding_similarity(scrap, desc)
-                            
-                        evidence_scores[ev_id] = max(sim, 0.0)
-                        if sim != 1.0 or not ev_id.endswith("_ACK"):
-                            logger.info(
-                                "Evidence '%s': C_ev = %.3f (scrap=%r vs desc=%r)",
-                                ev_id, evidence_scores[ev_id],
-                                scrap[:60], desc[:60],
-                            )
-                    else:
-                        # No description to compare against — treat as binary
-                        evidence_scores[ev_id] = 1.0
-                else:
-                    logger.warning(
-                        "Evidence grounding FAILED for %s: scrap=%r not in prompt",
-                        ev_id, scrap,
-                    )
-                    evidence_scores[ev_id] = 0.0
-            else:
-                evidence_scores[ev_id] = 0.0
+        if ev_id not in provided_ev_ids:
+            continue
+        scrap, ev_path = evidence_map.get(ev_id, ("", ""))
+        evidence_scores[ev_id] = _score_evidence_coverage(
+            ev_id,
+            scrap=scrap.strip(),
+            description=evidence_descriptions.get(ev_id, ""),
+            prompt=prompt,
+            is_ack=evidence_is_ack.get(ev_id, False),
+            evidence_path=ev_path,
+        )
 
-    # ── Step 15: Audit risk scoring ──────────────────────────────────────────
-    # Build a preliminary delta with all violations (before gate routing).
-    # This is needed by compute_audit_risk to iterate over failed_details.
+    # ── 6. Composite audit risk (TSF · (1 − C_ev) · ω, complement-product) ──
     prelim_delta = ConstraintDelta(
         allow=False,
         failed_rules=sorted(all_failed_rules),
         missing_evidence_ids=all_missing_evidence,
         failed_details=failed_details,
     )
-
     audit_risk = compute_audit_risk(
         prelim_delta, signals,
         trade_size_usd=trade_size,
@@ -614,50 +695,27 @@ def evaluate_proposal(
         iteration=iteration,
     )
 
-    # Filter out evidence items that have been successfully provided.
-    # An evidence item is "satisfied" if its C_ev score is > 0.
-    # The remaining list drives the Proposer's next-round feedback.
-    remaining_missing = [
-        ev_id for ev_id in all_missing_evidence
-        if evidence_scores.get(ev_id, 0.0) <= 0.0
-    ]
-
-    # ── Step 16: SBC Gate routing ────────────────────────────────────────────
-    # The audit_risk score is the SOLE determinant of the routing decision.
-    # No static severity labels — the math decides.
+    # ── 7. SBC gate routing ──────────────────────────────────────────────────
+    # The audit_risk composite score is the SOLE routing input — no parallel
+    # severity taxonomy.  AUTO_APPROVE hides the failure list (the trade
+    # proceeds, the proposer doesn't need to revise); REFINEMENT and
+    # HUMAN_ESCALATION expose it for the proposer / human reviewer.
     gate = audit_risk.gate_decision
-    score = audit_risk.composite_score
-
-    if gate == "AUTO_APPROVE":
-        delta = ConstraintDelta(
-            allow=True,
-            audit_risk_score=score,
-            gate_decision="AUTO_APPROVE",
-        )
-    elif gate == "HUMAN_ESCALATION":
-        delta = ConstraintDelta(
-            allow=False, severity=Severity.CRITICAL,
-            audit_risk_score=score,
-            gate_decision="HUMAN_ESCALATION",
-            failed_rules=sorted(all_failed_rules),
-            missing_evidence_ids=remaining_missing,
-            failed_details=failed_details,
-        )
-    else:  # REFINEMENT
-        delta = ConstraintDelta(
-            allow=False, severity=Severity.RECOVERABLE,
-            audit_risk_score=score,
-            gate_decision="REFINEMENT",
-            failed_rules=sorted(all_failed_rules),
-            missing_evidence_ids=remaining_missing,
-            failed_details=failed_details,
-        )
+    allow = (gate == "AUTO_APPROVE")
+    delta = ConstraintDelta(
+        allow=allow,
+        audit_risk_score=audit_risk.composite_score,
+        gate_decision=gate,
+        failed_rules=sorted(all_failed_rules) if not allow else [],
+        missing_evidence_ids=all_missing_evidence if not allow else [],
+        failed_details=failed_details if not allow else [],
+    )
 
     logger.info(
         "SBC Gate: %s (score=%.4f) | TSF: %.4f | Rules: %s | Evidence C_ev: %s",
-        gate, score, audit_risk.trade_size_factor,
+        gate, audit_risk.composite_score, audit_risk.trade_size_factor,
         sorted(all_failed_rules),
         {k: round(v, 3) for k, v in evidence_scores.items()},
     )
 
-    return delta, audit_risk, evidence_scores
+    return delta, audit_risk

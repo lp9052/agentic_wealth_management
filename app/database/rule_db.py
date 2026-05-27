@@ -12,7 +12,6 @@ from app.auditor.models import (
     TriggerCondition,
     KYCRequirement,
     EvidenceFallback,
-    Severity,
     TriggerOperator,
     KYCOperator,
 )
@@ -27,13 +26,24 @@ def load_all_regulations(db_path: str = DB_PATH) -> list[Regulation]:
     conn = get_connection(db_path)
     c = conn.cursor()
 
-    # 1. Load all evidence fallbacks keyed by kyc_id
+    # 1. Load all evidence fallbacks keyed by kyc_id.  The kyc_id itself is
+    # only used to attach the fallback to its parent KYC; we don't carry it
+    # into the in-memory model.  Empty descriptions are rejected loudly —
+    # they'd silently auto-cure rules in _score_evidence_coverage.
     fallback_map: dict[str, EvidenceFallback] = {}
     for row in c.execute("SELECT * FROM evidence_fallbacks"):
+        description = row["description"] or ""
+        if not description.strip():
+            raise ValueError(
+                f"evidence_fallbacks row {row['evidence_id']!r} has empty "
+                "description; non-empty descriptions are required so that "
+                "_score_evidence_coverage's semantic similarity has a "
+                "target.  Fix the seed."
+            )
         fallback_map[row["kyc_id"]] = EvidenceFallback(
             evidence_id=row["evidence_id"],
-            kyc_id=row["kyc_id"],
-            description=row["description"] or "",
+            description=description,
+            is_ack=bool(row["is_ack"]),
         )
 
     # 2. Load all KYC requirements keyed by condition_id
@@ -80,7 +90,7 @@ def load_all_regulations(db_path: str = DB_PATH) -> list[Regulation]:
         reg = Regulation(
             rule_id=row["rule_id"],
             rule_name=row["rule_name"],
-            severity=Severity(row["severity"]),
+            bypass_tsf=bool(row["bypass_tsf"]),
             description=row["description"] or "",
             clauses=clause_map.get(row["rule_id"], []),
         )

@@ -14,17 +14,14 @@ Also supports unsupervised mode (no auditing) for benchmarking.
 """
 
 import logging
-import warnings
-import numpy as np
 from typing import TypedDict
-
-# Silence EOL and Hardware-level numerical noise
-warnings.filterwarnings("ignore", category=FutureWarning)
-warnings.filterwarnings("ignore", category=RuntimeWarning)
-np.seterr(all='ignore')
 
 from dotenv import load_dotenv
 load_dotenv()  # Ensure GOOGLE_API_KEY is available from .env
+
+# Note: numerical-warning suppression lives in signal_detector.py, scoped to
+# the specific call sites (Apple Silicon MPS NaN/inf) via np.errstate — we
+# deliberately don't blanket-silence FutureWarning / RuntimeWarning here.
 
 from langgraph.graph import StateGraph, START, END
 
@@ -71,8 +68,6 @@ class AgentState(TypedDict):
     # User Simulation (for testing)
     additional_info: str        # Info to inject if revision requested
     info_injected: bool         # Track if simulator has already fired
-    # Evidence persistence across rounds
-    accepted_evidence: list     # Evidence items verified with C_ev > 0
 
 
 # ---------------------------------------------------------------------------
@@ -126,21 +121,6 @@ def proposer_node(state: AgentState) -> dict:
             previous_proposal_context=prev_context,
         )
 
-        # Auto-fill evidence_path when the LLM leaves it empty.
-        # Maps evidence_id → rule_id from the constraint_delta's failed_details
-        # to produce a traceable path for the audit trail.
-        if delta and proposal.provided_evidence:
-            evid_to_rule: dict[str, str] = {}
-            for fd in delta.get("failed_details", []):
-                mid = fd.get("missing_evidence_id", "")
-                rid = fd.get("rule_id", "")
-                if mid and rid:
-                    evid_to_rule[mid] = rid
-            for ev in proposal.provided_evidence:
-                if not ev.evidence_path and ev.evidence_id:
-                    rule = evid_to_rule.get(ev.evidence_id, "UNKNOWN")
-                    ev.evidence_path = f"[USER_INPUT → {rule}/{ev.evidence_id}]"
-
         proposal_text = (
             f"**Action:** {proposal.action}\n"
             f"**Asset:** {proposal.asset_ticker} ({proposal.instrument_type})\n"
@@ -176,7 +156,7 @@ def proposer_node(state: AgentState) -> dict:
                 "rationale": proposal.rationale,
                 "user_question": proposal.user_question,
                 "provided_evidence": [
-                    {"evidence_id": e.evidence_id, "value": e.value, "scrap": e.scrap, "evidence_path": e.evidence_path}
+                    {"evidence_id": e.evidence_id, "value": e.value, "scrap": e.scrap}
                     for e in proposal.provided_evidence
                 ],
             },
@@ -210,55 +190,25 @@ def auditor_node(state: AgentState) -> dict:
     Deterministic compliance auditor - evaluates the proposal against
     regulatory rules using pure logic (no LLM calls).
     """
-    from app.auditor.models import TradeProposal, ProvidedEvidence
+    from app.auditor.models import TradeProposal
 
-    proposal_data = state.get("proposal_json", {})
-
-    # Reconstruct TradeProposal from state
-    evidence = [
-        ProvidedEvidence(
-            evidence_id=e.get("evidence_id", ""),
-            value=e.get("value", False),
-            scrap=e.get("scrap", ""),
-            evidence_path=e.get("evidence_path", ""),
-        )
-        for e in proposal_data.get("provided_evidence", [])
-    ]
-
-    # Merge previously-accepted evidence into the current evidence list.
-    # This ensures evidence provided in earlier rounds persists even if the
-    # Proposer LLM doesn't re-emit it in subsequent rounds.
-    current_ev_ids = {e.evidence_id for e in evidence}
-    for prev_ev in state.get("accepted_evidence", []):
-        if prev_ev["evidence_id"] not in current_ev_ids:
-            evidence.append(ProvidedEvidence(
-                evidence_id=prev_ev["evidence_id"],
-                value=prev_ev.get("value", True),
-                scrap=prev_ev.get("scrap", ""),
-                evidence_path=prev_ev.get("evidence_path", ""),
-            ))
-
-    trade_proposal = TradeProposal(
-        proposal_id=proposal_data.get("proposal_id", ""),
-        client_id=state["client_id"],
-        action=proposal_data.get("action", "REVIEW"),
-        asset_ticker=proposal_data.get("asset_ticker", ""),
-        instrument_type=proposal_data.get("instrument_type", "EQUITY") or "EQUITY",
-        trade_size_usd=proposal_data.get("trade_size_usd", 0.0),
-        rationale=proposal_data.get("rationale", ""),
-        provided_evidence=evidence,
+    # Rehydrate the TradeProposal from the JSON-serialised state form.  The
+    # reconstruction lives on the dataclass (TradeProposal.from_proposal_json)
+    # so any other consumer that pulls a proposal off the wire uses the same
+    # defaults and field names.
+    trade_proposal = TradeProposal.from_proposal_json(
+        state.get("proposal_json", {}), state["client_id"]
     )
 
     # Get normalized client state
     client_state = get_client_state(state["client_id"], state.get("client_data"))
 
-    # Run the deterministic auditor.
-    # Pass the original user prompt for signal detection and the current revision round
-    # so SBCRiskScore.iteration correctly records which loop cycle produced each score.
+    # Run the deterministic auditor.  ``iteration`` records which loop cycle
+    # produced this score, so SBCRiskScore.iteration is right in the audit trail.
+    iteration = state.get("revision_count", 1)
     user_prompt = state.get("prompt", "")
-    current_iteration = state.get("revision_count", 1)
-    delta, audit_risk, evidence_scores = evaluate_proposal(
-        trade_proposal, client_state, user_prompt, iteration=current_iteration
+    delta, audit_risk = evaluate_proposal(
+        trade_proposal, client_state, user_prompt, iteration=iteration
     )
 
     # Build human-readable critique with SBC gate decision
@@ -285,6 +235,16 @@ def auditor_node(state: AgentState) -> dict:
         critique += "\nProposer must revise or provide evidence to reduce risk score."
         status = "NEEDS_REVISION"
 
+    # REVIEW = proposer asking a clarifying question, no trade proposed.
+    # The audit_risk above scores any signals in the user prompt for the
+    # audit trail, but a clean prompt would route to AUTO_APPROVE → END,
+    # which would terminate the session before the user has even answered
+    # the question.  Force NEEDS_REVISION so the loop continues through
+    # user_simulator_node; HUMAN_ESCALATION still wins (a signal in the
+    # prompt that warrants escalation should still block).
+    if trade_proposal.action == "REVIEW" and status == "CERTIFIED_COMPLIANT":
+        status = "NEEDS_REVISION"
+
     if state.get("is_real_time"):
         print(f"\n\033[1;35m{critique}\033[0m")
 
@@ -292,8 +252,8 @@ def auditor_node(state: AgentState) -> dict:
     prev_scores = state.get("risk_scores", []) or []
     new_scores = prev_scores + [audit_risk.to_dict()]
 
-    # Append auditor decision to history_log
-    iteration = state.get("revision_count", 1)
+    # Append auditor decision to history_log (reusing ``iteration`` from above
+    # — there's exactly one notion of "current round" per audit call).
     audit_entry = (
         f"[AUDITOR — Round {iteration}] Status: {status}\n"
         f"  Audit Risk  : {audit_risk.composite_score:.3f} ({audit_risk.risk_level})\n"
@@ -302,32 +262,15 @@ def auditor_node(state: AgentState) -> dict:
     )
     for comp in audit_risk.components:
         audit_entry += (
-            f"  ↳ [{comp.rule_id}|{comp.severity.value if comp.severity else 'SIGNAL'}] "
-            f"R={comp.clamped_score:.3f} TSF={comp.trade_size_factor:.4f} "
+            f"  ↳ [{comp.rule_id}|{'ABS' if comp.bypass_tsf else 'GRD'}] "
+            f"R={comp.score:.3f} TSF={comp.trade_size_factor:.4f} "
             f"C_ev={comp.evidence_coverage:.3f} ω={comp.omega}\n"
         )
     for d in delta.failed_details:
-        audit_entry += f"  ↳ [{d.rule_id}|{d.severity.value}] {d.description}\n"
+        audit_entry += f"  ↳ [{d.rule_id}|{'ABS' if d.bypass_tsf else 'GRD'}] {d.description}\n"
     if delta.missing_evidence_ids:
         audit_entry += f"  Missing Evidence: {delta.missing_evidence_ids}\n"
     prev_log = state.get("history_log") or ""
-
-    # Accumulate accepted evidence (C_ev > 0) for persistence across rounds.
-    prev_accepted = list(state.get("accepted_evidence", []) or [])
-    accepted_ids = {a["evidence_id"] for a in prev_accepted}
-    for ev_id, score in evidence_scores.items():
-        if score > 0 and ev_id not in accepted_ids:
-            # Find the scrap and path from the proposal evidence
-            for pe in trade_proposal.provided_evidence:
-                if pe.evidence_id == ev_id:
-                    prev_accepted.append({
-                        "evidence_id": ev_id,
-                        "value": True,
-                        "scrap": pe.scrap,
-                        "evidence_path": pe.evidence_path,
-                    })
-                    accepted_ids.add(ev_id)
-                    break
 
     return {
         "critique": critique,
@@ -336,7 +279,6 @@ def auditor_node(state: AgentState) -> dict:
         "fired_rules": delta.failed_rules,
         "risk_scores": new_scores,
         "history_log": prev_log + audit_entry,
-        "accepted_evidence": prev_accepted,
     }
 
 
@@ -383,12 +325,13 @@ def user_simulator_node(state: AgentState) -> dict:
 # ---------------------------------------------------------------------------
 
 def router_node(state: AgentState) -> str:
-    """Route after proposer: to auditor or directly to user.
+    """Route after proposer.
 
-    The auditor runs on concrete trade proposals (BUY/SELL/HOLD).
-    If the proposer is merely asking a question (REVIEW), we skip the
-    redundant auditor pass in real-time mode to avoid double-printing
-    identical risk scores.
+    Always send to the auditor — the audit trail records every round,
+    including REVIEW (question) rounds.  Real-time and unsupervised
+    modes are intentionally identical here; the only mode-conditional
+    behavior in the graph is inside ``user_simulator_node`` (human
+    input vs. test-data injection).
     """
     if not state.get("supervisor_enabled", True):
         return END
@@ -396,55 +339,43 @@ def router_node(state: AgentState) -> str:
     # Convergence safety valve: after MAX_ITERATIONS, escalate to human review
     if state.get("revision_count", 0) >= MAX_ITERATIONS:
         return END
-    
-    proposal_action = state.get("proposal_json", {}).get("action", "")
-    if proposal_action == "REVIEW" and state.get("is_real_time"):
-        return "user_simulator_node"
-        
+
     return "auditor_node"
 
 
 def compliance_router(state: AgentState) -> str:
     """Route after auditor: approve, retry, or block.
 
-    Routing is driven by the SBC gate decision (via status).
-    REVIEW rounds always loop back because no trade has been proposed yet —
-    this is session flow, not a compliance override.
+    Identical in real-time and unsupervised modes.  Terminal statuses
+    (CERTIFIED_COMPLIANT, CRITICAL_BLOCK) always END regardless of
+    action type — escalation on a REVIEW round (e.g., INSIDER_TIP in
+    the user's question) must still hard-block the session.
+
+    Non-terminal outcomes route through ``user_simulator_node`` so info
+    can be injected (test) or solicited (real-time) before the next
+    proposer attempt.  user_simulator_node is a no-op when neither
+    applies, and user_simulator_router falls through to proposer_node.
+
+    Note: REVIEW + AUTO_APPROVE was rewritten to NEEDS_REVISION in
+    ``auditor_node`` so that pure question rounds don't terminate
+    before the user has answered.  Only HUMAN_ESCALATION can end a
+    REVIEW round here, which is the intended behavior.
     """
     status = state.get("status", "")
 
     if status == "CERTIFIED_COMPLIANT":
         return END
-
     if status == "CRITICAL_BLOCK":
-        return END  # Hard block, no retry
+        return END  # Hard block, no retry — even for REVIEW
 
     # Convergence safety valve: after MAX_ITERATIONS, escalate to human review
     if state.get("revision_count", 0) >= MAX_ITERATIONS:
         return END
 
-    # REVIEW round: proposer is gathering info, not proposing a trade.
-    # The SBC score is recorded for the audit trail, but the session must
-    # continue so the user can answer the proposer's question.
-    proposal_action = state.get("proposal_json", {}).get("action", "")
-    if proposal_action == "REVIEW":
-        if state.get("is_real_time"):
-            return "user_simulator_node"
-        # Automated mode: inject additional_info on REVIEW rounds too
-        if state.get("additional_info") and not state.get("info_injected"):
-            return "user_simulator_node"
-        return "proposer_node"
-
-    if state.get("is_real_time"):
-        # BUY/SELL with REFINEMENT: proposer must reformulate its
-        # question/evidence request based on the auditor's constraint delta.
-        return "proposer_node"
-
-    # Automated mode: inject additional info if available, then retry proposer.
-    if state.get("additional_info") and not state.get("info_injected"):
-        return "user_simulator_node"
-
-    return "proposer_node"
+    # Non-terminal: route through user node.  Applies uniformly to
+    # REVIEW (proposer asked a question) and REFINEMENT (proposer
+    # proposed a trade that needs revision).
+    return "user_simulator_node"
 
 
 def user_simulator_router(state: AgentState) -> str:

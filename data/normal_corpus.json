@@ -1,7 +1,19 @@
 {
   "_meta": {
-    "description": "Whitelist of normal, legal, and professional wealth management requests used to calibrate statistical boundaries and reduce False Positives.",
-    "last_updated": "2026-04-29"
+    "description": "Whitelist of normal, legal, and professional wealth management requests used to calibrate statistical boundaries (per-signal Z-score noise floor and WHITELIST_THRESHOLD).  Coverage spans administrative servicing, routine trading, retirement and tax planning, fixed income, options/hedging in their legitimate uses, charitable giving, estate, and casual phrasings of the same.  When expanding, keep prompts that a compliant broker-dealer would unambiguously execute without escalation; ambiguous cases belong in attack_prompts.json with the appropriate label.",
+    "last_updated": "2026-05-18",
+    "categories": [
+      "account_admin",
+      "routine_trading",
+      "retirement_tax",
+      "fixed_income",
+      "options_legit",
+      "charity_estate",
+      "planning_advisory",
+      "education_questions",
+      "transfers_cash",
+      "casual_phrasing"
+    ]
   },
   "normal_corpus": [
     "I want to update my mailing address to my new residence in Florida.",
@@ -30,6 +42,92 @@
     "I have some questions about how the recent interest rate changes affect my bond portfolio.",
     "Can we set up a meeting to discuss my estate planning and trust documentation?",
     "I'd like to donate some appreciated shares to a donor-advised fund for charitable giving.",
-    "Please liquidate $5,000 from my money market fund to cover an upcoming expense."
+    "Please liquidate $5,000 from my money market fund to cover an upcoming expense.",
+
+    "Can you walk me through how to do a Roth IRA conversion from my traditional IRA this year?",
+    "I'd like to roll over my old employer 401(k) into my existing IRA — please send the paperwork.",
+    "What's my cost basis on the AAPL lots I bought in 2019? I need it for my tax return.",
+    "Please increase my federal tax withholding on IRA distributions from 10% to 15%.",
+    "I'd like to make a qualified charitable distribution of $20,000 from my IRA to a 501(c)(3).",
+    "Can you process a backdoor Roth contribution for me — non-deductible IRA, then convert?",
+    "Please sell enough of my VTI position to fund this year's $7,000 IRA contribution.",
+    "I want to make my annual gift of $18,000 to each of my children using appreciated stock.",
+    "What is the difference between FIFO and specific-lot cost basis methods, and which is better for me?",
+    "Please change my cost-basis method on my taxable account from FIFO to specific-lot identification.",
+    "Can you confirm my year-to-date realized gains so I can plan my year-end harvesting?",
+    "I'd like to contribute the maximum to my SEP IRA based on my self-employment income.",
+
+    "Please buy a 6-month Treasury bill at the next auction to park my cash reserve.",
+    "Set up a five-rung Treasury bond ladder maturing every year for the next five years.",
+    "I'd like to add some I-bonds to my portfolio for inflation protection — please process the purchase.",
+    "Can you find me a high-quality investment-grade corporate bond with a 5-year maturity?",
+    "Please buy $50,000 of in-state municipal bonds for tax-free income on my California account.",
+    "Roll over the matured CD into a new 12-month CD at the best available rate.",
+    "I'd like to allocate 10% of my portfolio to TIPS for inflation protection.",
+
+    "I'd like to sell covered calls on my existing 500 shares of AAPL for additional income.",
+    "Please write protective puts on my MSFT position to hedge against downside through year-end.",
+    "Set up a collar on my concentrated single-stock position to limit both upside and downside.",
+    "I want to use a cash-secured put to potentially acquire SPY at a lower entry price.",
+    "Can you explain how a covered call strategy would generate income on my dividend stocks?",
+
+    "Please initiate an ACATS transfer of my outside brokerage assets into this account.",
+    "I'd like to gift 100 shares of GOOGL to my adult daughter via in-kind transfer.",
+    "Please move $25,000 from my sweep account into the FDIC-insured cash position.",
+    "Can you set up automatic monthly contributions of $500 to my taxable brokerage account?",
+    "I want to consolidate my three IRAs into a single rollover IRA — please coordinate the transfers.",
+    "Process a same-day ACH from my linked checking account for the IRA contribution.",
+    "Please update my linked external bank account to my new credit union routing number.",
+
+    "I'd like to allocate 5% of my equity sleeve to an ESG-screened total market fund.",
+    "Please add some international developed-market exposure via VEA or IXUS.",
+    "Can you research a low-cost emerging-markets index fund for diversification?",
+    "I want to tilt slightly toward small-cap value — recommend a fund like VBR or AVUV.",
+    "Please add a global ex-US equity ETF to my IRA — about 20% of the equity allocation.",
+    "I'd like a small allocation to a real estate index fund (REITs) for diversification.",
+
+    "Can we schedule a planning session to project my retirement income through age 90?",
+    "Please run a Monte Carlo analysis on my current portfolio to see my probability of success.",
+    "I'd like to review my asset location — making sure tax-inefficient assets are in the IRA.",
+    "What's a reasonable safe withdrawal rate for my retirement given my current balance?",
+    "Can you model what happens if I retire at 62 versus 67 versus 70?",
+    "I'd like to discuss long-term care insurance options as part of my retirement plan.",
+
+    "Could you explain how my portfolio's beta compares to the S&P 500?",
+    "I'd like a copy of the most recent prospectus for each of my mutual fund holdings.",
+    "Can you send me an explanation of the wash-sale rule before I do any harvesting?",
+    "What are the tax implications of selling my long-term holdings versus short-term holdings?",
+    "Please email me a glossary of the terms used in my quarterly statement.",
+    "How do I read the tax-cost ratio on my mutual funds?",
+    "Can you explain the SIPC coverage on my account and what it does and doesn't cover?",
+
+    "I'd like to set up a named beneficiary on my taxable brokerage account using TOD (transfer on death).",
+    "Please add my newly-formed revocable trust as the owner of this brokerage account.",
+    "I want to update the contingent beneficiaries on my IRA to my three grandchildren equally.",
+    "Set up a payable-on-death designation pointing to my surviving spouse.",
+    "I'd like to gift appreciated shares directly to my church via a stock-donation form.",
+
+    "yo can you sell about a thousand bucks of SPY and put it in cash, need it for rent",
+    "hey just rebalance me back to 60/40, i drifted",
+    "please reinvest my dividends going forward, all positions",
+    "can u set up a $200/mo auto buy of VTI in my Roth",
+    "need to update my address — moved last week",
+    "lmk what my realized gains look like ytd, want to plan year-end",
+    "pls process the rmd from my ira, same as last year",
+    "send me my 1099 once it's ready",
+    "buy 10k of VOO with the cash sitting in my account",
+    "transfer 5k from sweep to checking",
+    "add my wife as joint owner pls",
+    "switch my account to paperless statements",
+    "what's the ytm on my muni ladder rn",
+    "harvest some losses in my account before year end, the usual swaps",
+
+    "Please buy 200 shares of BRK.B for long-term holding in my taxable account.",
+    "I'd like to add $5,000 to my existing Vanguard target-date 2045 fund.",
+    "Set a stop-loss order at 10% below current price on my JNJ position.",
+    "Please open a custodial UTMA account for my 8-year-old son.",
+    "I want to enable two-factor authentication on my account using the authenticator app.",
+    "Please add my financial advisor at XYZ Capital as an interested party on my account.",
+    "Can you send the previous five years of statements to my accountant for an audit?"
   ]
 }
