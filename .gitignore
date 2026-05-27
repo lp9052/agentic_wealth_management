@@ -161,3 +161,4 @@ cython_debug/
 *.log
 scratch/
 data/chroma_db/
+book_material/

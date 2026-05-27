@@ -24,18 +24,24 @@ Output: case_study_audit_log.md — full cycle-by-cycle audit trail.
 """
 
 import json
+import sys
 import time
 import datetime
 import warnings
 import logging
+from pathlib import Path
+
 import numpy as np
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 np.seterr(all='ignore')
 
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv(PROJECT_ROOT / ".env")
 
 from app.engine import graph
 
@@ -154,7 +160,7 @@ def _build_state(client_id: str, client_data: dict, prompt: str,
 def run_case_studies():
     """Execute all three case studies and produce the audit log."""
     # Load client data
-    with open("data/vault.json", "r") as f:
+    with open(PROJECT_ROOT / "data" / "vault.json", "r") as f:
         clients = {c["client_id"]: c for c in json.load(f)}
 
     report_lines = []
@@ -287,11 +293,11 @@ def run_case_studies():
         report_lines.append("---\n\n")
 
     # Write report
-    output_path = "case_study_audit_log.md"
+    output_path = PROJECT_ROOT / "reports" / "case_study_audit_log.md"
     with open(output_path, "w") as f:
         f.write("".join(report_lines))
     print(f"\n{'='*70}")
-    print(f"  Case study audit log saved to {output_path}")
+    print(f"  Case study audit log saved to {output_path.relative_to(PROJECT_ROOT)}")
     print(f"{'='*70}")
 
 

@@ -79,7 +79,7 @@ Pure-logic, **no LLM calls**. `rule_engine.evaluate_proposal()` runs:
   and whitelist gate.
 - `data/ticker_config.json` — Per-ticker suppress lists and global derivative
   markers.
-- `data/attack_prompts.json` — Labeled adversarial prompts for `test_bench.py`.
+- `data/attack_prompts.json` — Labeled adversarial prompts for `test_bench/test_bench.py`.
 
 ## Setup
 
@@ -112,13 +112,16 @@ uvicorn app.main:app --reload
 python3 real_time_runner.py
 
 # End-to-end benchmark: signal accuracy + supervised vs unsupervised latency
-# + per-rule catch rate. Hits the real Gemini API; writes performance_report.md.
+# + per-rule catch rate. Hits the real Gemini API; writes reports/performance_report.md.
 # Shrink runs by tweaking num_samples in run_tests().
-python3 test_bench.py
+python3 test_bench/test_bench.py
+
+# Canonical case studies → reports/case_study_audit_log.md
+python3 test_bench/test_case_studies.py
 ```
 
-There is no test runner, linter, or CI configured. `test_bench.py` is an
-end-to-end benchmark, not a unit-test suite.
+There is no test runner, linter, or CI configured. `test_bench/` holds
+end-to-end benchmarks, not a unit-test suite.
 
 To regenerate fixture data (rarely needed):
 
@@ -133,7 +136,7 @@ python3 scripts/generate_prompts.py   # → data/attack_prompts.json
 the prompt, structured proposal, constraint delta, fired rules, per-iteration
 risk scores, and a human-readable `history_log`. New state fields must be
 added to `AgentState` and to the initial state dicts in `app/main.py`,
-`test_bench.py`, and `real_time_runner.py`.
+`test_bench/test_bench.py`, and `real_time_runner.py`.
 
 ## Conventions
 
@@ -154,9 +157,3 @@ added to `AgentState` and to the initial state dicts in `app/main.py`,
   their weights below 0.80.
 - **One LLM, one shared instance.** `engine._get_llm()` caches the Proposer
   LLM at module level — don't instantiate `ChatGoogleGenerativeAI` per node.
-
-## Design doc
-
-`implementation_v2.md` is the original design document. The runtime has
-diverged (SQLite instead of Postgres/Neo4j, a Python rule engine instead of
-OPA/Rego, score-driven gates instead of severity tags) — trust the code.

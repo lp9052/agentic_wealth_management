@@ -6,8 +6,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 The **Stochastic Boundary Control (SBC) Framework** — a wealth-management trade engine that pairs an LLM Proposer (Gemini 2.5 Flash) with a fully deterministic compliance Auditor. The Proposer drafts trades from a client transcript; the Auditor evaluates them against a regulatory AST + semantic signal detector and either auto-approves, asks for a revision, or escalates to a human. The math gate — not the LLM — is the authority.
 
-The design doc lives at `implementation_v2.md`. The runtime architecture has diverged from that doc (notably: SQLite instead of Postgres/Neo4j, Python rule engine instead of OPA/Rego, score-driven gates instead of severity tags) — trust the code, not the doc.
-
 ## Setup & commands
 
 ```bash
@@ -33,8 +31,11 @@ uvicorn app.main:app --reload
 python3 real_time_runner.py
 
 # Run the full benchmark (signal detection accuracy + supervised vs unsupervised
-# latency + per-rule catch rate). Writes to performance_report.md.
-python3 test_bench.py
+# latency + per-rule catch rate). Writes to reports/performance_report.md.
+python3 test_bench/test_bench.py
+
+# Run the canonical case studies → reports/case_study_audit_log.md
+python3 test_bench/test_case_studies.py
 
 # Run the unit-test suite. pyproject.toml configures pytest with
 # --cov-fail-under=100, so partial runs "fail" on coverage — drop cov flags
@@ -43,7 +44,7 @@ pytest
 pytest tests/test_specific.py --no-cov   # single-file, no coverage gate
 ```
 
-`pyproject.toml` configures **pytest with 100 %-branch-coverage gating** on `app/`; there is no linter and no CI workflow (`.github/` is absent). `tests/` holds the unit suite. `test_bench.py` is an end-to-end benchmark, not a unit-test target — it hits the real Gemini API and takes minutes per run. Shrink it by tweaking `num_samples` in `run_tests()`.
+`pyproject.toml` configures **pytest with 100 %-branch-coverage gating** on `app/`; there is no linter and no CI workflow (`.github/` is absent). `tests/` holds the unit suite. `test_bench/` holds end-to-end benchmarks (`test_bench.py`, `test_case_studies.py`), not unit-test targets — they hit the real Gemini API and take minutes per run. Shrink `test_bench.py` by tweaking `num_samples` in `run_tests()`. Generated reports land in `reports/`.
 
 Regenerating fixture data (rarely needed): `scripts/generate_vault.py` produces `data/vault.json`; `scripts/generate_prompts.py` produces `data/attack_prompts.json`. `scripts/tune_thresholds.py` sweeps `Z_SCORE_THRESHOLD` / `WHITELIST_THRESHOLD` over the normal corpus + attack prompts and emits a decision matrix for re-calibrating the signal detector.
 
@@ -51,7 +52,7 @@ Regenerating fixture data (rarely needed): `scripts/generate_vault.py` produces 
 
 ### The SBC loop (`app/engine.py`)
 
-A LangGraph state machine with three nodes — `proposer_node → auditor_node → user_simulator_node` — looping until the gate decides. State is a `TypedDict` (`AgentState`) with 16 fields covering inputs (`client_id`, `client_data`, `prompt`), proposer outputs (`proposal`, `proposal_json`), auditor outputs (`critique`, `constraint_delta`, `status`, `fired_rules`, `risk_scores`), loop control (`revision_count`, `supervisor_enabled`, `is_real_time`), the running `history_log`, and the user-simulator handshake (`additional_info`, `info_injected`). Any new field has to land in **all** initial-state dicts (`app/main.py`, `test_bench.py`, `real_time_runner.py`).
+A LangGraph state machine with three nodes — `proposer_node → auditor_node → user_simulator_node` — looping until the gate decides. State is a `TypedDict` (`AgentState`) with 16 fields covering inputs (`client_id`, `client_data`, `prompt`), proposer outputs (`proposal`, `proposal_json`), auditor outputs (`critique`, `constraint_delta`, `status`, `fired_rules`, `risk_scores`), loop control (`revision_count`, `supervisor_enabled`, `is_real_time`), the running `history_log`, and the user-simulator handshake (`additional_info`, `info_injected`). Any new field has to land in **all** initial-state dicts (`app/main.py`, `test_bench/test_bench.py`, `real_time_runner.py`).
 
 Routing is driven by gate constants `SBC_GATE_AUTO = 0.20` and `SBC_GATE_ESCALATE = 0.80` in `risk_scoring.py`:
 - `< 0.20` → `AUTO_APPROVE` (trade executes, graph ends)
@@ -64,7 +65,7 @@ The single LLM instance is cached in `_llm` (module global, lazy-initialized) �
 
 ### The Proposer (`app/proposer/`)
 
-- `agent.py` — `generate_proposal()` calls Gemini with `with_structured_output(TradeProposalSchema)` (Pydantic, tool-calling under the hood). `generate_proposal_freeform()` is the unsupervised baseline used by `test_bench.py`.
+- `agent.py` — `generate_proposal()` calls Gemini with `with_structured_output(TradeProposalSchema)` (Pydantic, tool-calling under the hood). `generate_proposal_freeform()` is the unsupervised baseline used by `test_bench/test_bench.py`.
 - `prompts.py` — All system prompts. Heavy with behavioral rules around evidence handling, the difference between `REVIEW` and `BUY`/`SELL`, and how to preserve `asset_ticker` + `instrument_type` across revisions. Modify here, not in `agent.py`.
 - `rag.py` — ChromaDB-backed RAG that injects full regulation text into the system prompt on revision cycles. Falls back to flat `regulations.json` lookup if Chroma is uninitialized.
 
@@ -94,11 +95,11 @@ Typo correction happens upstream — `proposer_node` calls `typo_filter.correct_
 - `data/signal_anchors.json` — Anchor texts per signal (used to build embedding centroids at init).
 - `data/normal_corpus.json` — "Innocent" prompts that define the noise floor for Z-score thresholds and serve as the whitelist gate.
 - `data/ticker_config.json` — Per-ticker suppress lists + global derivative markers. Both `app/auditor/rule_engine.py` and the signal pipeline read from here.
-- `data/attack_prompts.json` — Labeled adversarial prompts used by `test_bench.py`.
+- `data/attack_prompts.json` — Labeled adversarial prompts used by `test_bench/test_bench.py`.
 
 ### State key conventions
 
-`AgentState` (in `engine.py`) is the only contract between nodes. New fields must be added to `AgentState`, the initial state dicts in `app/main.py` / `test_bench.py` / `real_time_runner.py`, and any places that `state.get()` them. The `history_log` field accumulates a human-readable trace across all rounds; the `risk_scores` field accumulates `SBCRiskScore.to_dict()` per iteration for the audit trail.
+`AgentState` (in `engine.py`) is the only contract between nodes. New fields must be added to `AgentState`, the initial state dicts in `app/main.py` / `test_bench/test_bench.py` / `real_time_runner.py`, and any places that `state.get()` them. The `history_log` field accumulates a human-readable trace across all rounds; the `risk_scores` field accumulates `SBCRiskScore.to_dict()` per iteration for the audit trail.
 
 ## Conventions worth knowing
 
@@ -108,4 +109,4 @@ Typo correction happens upstream — `proposer_node` calls `typo_filter.correct_
 - **`REVIEW` ≠ violation, but it still gets audited.** When the proposer can't proceed without more info from the user, it emits `action="REVIEW"` with a question in `user_question`. The auditor *always* runs (the router never skips it — `router_node` always returns `auditor_node`), records a score for the audit trail, and `auditor_node` then **rewrites `CERTIFIED_COMPLIANT` → `NEEDS_REVISION` on REVIEW rounds** so a clean question doesn't terminate the session before the user has answered. `HUMAN_ESCALATION` on a REVIEW round (e.g., the user's question contains an `INSIDER_TIP` signal) still hard-blocks. In real-time mode (`is_real_time=True`) the auditor additionally prints the critique to the terminal.
 - **CRITICAL rule weights ≥ `SBC_GATE_ESCALATE`.** Don't lower weights for CRITICAL rules in `DEFAULT_RULE_WEIGHTS` below 0.80 — they must always trip the human-escalation gate. Same for `STATIC_PORTFOLIO` when it carries CRITICAL failures.
 - **One LLM, one shared instance.** `engine._get_llm()` caches the proposer LLM at module level. Don't instantiate `ChatGoogleGenerativeAI` per node call.
-- **`fired_rules` filtering in test_bench.** `test_bench.py` strips `STATIC_PORTFOLIO` from `fired_rules` when computing rule-category catch rates — it's noise for benchmarking regulatory detection, but a real failure for end users. Keep them in the audit trail; only filter in metrics aggregation.
+- **`fired_rules` filtering in test_bench.** `test_bench/test_bench.py` strips `STATIC_PORTFOLIO` from `fired_rules` when computing rule-category catch rates — it's noise for benchmarking regulatory detection, but a real failure for end users. Keep them in the audit trail; only filter in metrics aggregation.

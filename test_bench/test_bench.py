@@ -15,11 +15,16 @@ Reports:
 
 import json
 import logging
+import sys
 import time
 import datetime
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
 
 from dotenv import load_dotenv
-load_dotenv()  # Load GOOGLE_API_KEY and other vars from .env
+load_dotenv(PROJECT_ROOT / ".env")  # Load GOOGLE_API_KEY and other vars from .env
 
 from tqdm import tqdm
 
@@ -31,9 +36,9 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 
 def load_data():
     """Load client profiles and test prompts."""
-    with open("data/vault.json", "r") as f:
+    with open(PROJECT_ROOT / "data" / "vault.json", "r") as f:
         clients = {c["client_id"]: c for c in json.load(f)}
-    with open("data/attack_prompts.json", "r") as f:
+    with open(PROJECT_ROOT / "data" / "attack_prompts.json", "r") as f:
         prompts = json.load(f)
     return clients, prompts
 
@@ -273,9 +278,10 @@ def run_tests(num_samples=50):
         report += f"**Auditing Latency Diff**: +{(r['latency_supervised'] - r['latency_unsupervised']):.2f}s\n"
         report += f"**Cycle History**:\n{r['history_log']}\n---\n"
 
-    with open("performance_report.md", "w") as f:
+    report_path = PROJECT_ROOT / "reports" / "performance_report.md"
+    with open(report_path, "w") as f:
         f.write(report)
-    print("\nTest complete. Report saved to performance_report.md")
+    print(f"\nTest complete. Report saved to {report_path.relative_to(PROJECT_ROOT)}")
 
 
 if __name__ == "__main__":
