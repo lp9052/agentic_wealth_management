@@ -2,7 +2,7 @@
 Threshold tuning for the SBC signal detector.
 
 Loads the (expanded) normal_corpus.json + labeled attack_prompts.json,
-sweeps candidate values of ``Z_SCORE_THRESHOLD`` and
+sweeps candidate values of ``Z_SCORE_THRESHOLD``, ``THETA_FLOOR``, and
 ``WHITELIST_THRESHOLD``, and reports per-signal precision / recall / F1
 for each combination — plus the overall accuracy on the LEGAL_NORMAL
 class (whitelist gate).
@@ -18,13 +18,17 @@ What it does:
      fin-mpnet + philschmid bge-base) and the per-signal anchors.
   2. Computes ensemble cosine similarity for every (prompt, signal)
      pair — for both the normal corpus and the attack corpus.
-  3. For each candidate ``Z`` in {1.5, 1.75, 2.0, 2.25, 2.5}:
+  3. For each (Z, floor) pair in the Cartesian product of
+     Z_CANDIDATES × FLOOR_CANDIDATES:
        a. Re-derives per-signal thresholds:
-            θ_sig = max(mean_noise_sig + Z·std_noise_sig, 0.60)
+            θ_sig = max(mean_noise_sig + Z·std_noise_sig, floor)
        b. Predicts the highest-similarity signal per attack prompt
           (only counts a "hit" if sim ≥ θ).
        c. Confusion matrix vs. expected_violation labels →
           per-signal P / R / F1, plus macro-F1.
+     Sweeping the floor is essential: if every per-signal mean+Z·σ is
+     below the floor, Z becomes a dead parameter and only the floor
+     controls behaviour.
   4. For each candidate ``W`` in {0.45, 0.50, 0.55, 0.60, 0.65}:
        a. Computes max similarity of each attack prompt to the normal
           corpus.
@@ -32,12 +36,12 @@ What it does:
           NOT fire NON_STANDARD_REQUEST) and recall on non-LEGAL
           attacks that have no detectable signal (should fire
           NON_STANDARD_REQUEST as a backstop).
-  5. Prints a recommendation: the (Z, W) pair that maximises macro-F1
-     subject to LEGAL_NORMAL false-positive rate ≤ 10 %.
+  5. Prints a recommendation: the (Z, floor, W) triple that maximises
+     macro-F1 subject to LEGAL_NORMAL false-positive rate ≤ 10 %.
 
 The output is a decision aid, not a config change.  Update
-Z_SCORE_THRESHOLD / WHITELIST_THRESHOLD in app/auditor/signal_detector.py
-once you've picked a value.
+Z_SCORE_THRESHOLD / the floor literal / WHITELIST_THRESHOLD in
+app/auditor/signal_detector.py once you've picked a value.
 
 No GPU required, but loading both models takes ~1 GB RAM and ~30 s on
 first run (cached afterwards).
@@ -70,12 +74,13 @@ _MODEL_NAMES = (
     "philschmid/bge-base-financial-matryoshka",
 )
 
-# Hard floor used by the production detector — never let a derived
-# threshold drop below this even if the noise floor is unusually low.
-THETA_FLOOR = 0.60
-
 # Candidate values to sweep
-Z_CANDIDATES = (1.5, 1.75, 2.0, 2.25, 2.5)
+Z_CANDIDATES = (1.5, 1.75, 2.0, 2.25, 2.5, 3.0)
+# Hard floor: never let a derived per-signal threshold drop below this
+# even if the noise floor is unusually low.  Sweep this jointly with Z —
+# when every signal's mean+Z·σ is below the floor (as is currently the
+# case in production), the floor is the *only* lever that matters.
+FLOOR_CANDIDATES = (0.50, 0.52, 0.54, 0.56, 0.58, 0.60)
 W_CANDIDATES = (0.45, 0.50, 0.55, 0.60, 0.65)
 
 # Acceptable false-positive rate on LEGAL_NORMAL attacks for the
@@ -117,8 +122,18 @@ def _load_corpus() -> tuple[list[str], list[dict[str, Any]], dict[str, list[str]
         attacks = json.load(f)
     with open(_ANCHORS_PATH) as f:
         anchors_raw = json.load(f)
-    # Drop _meta and any non-list entries
-    anchors = {k: v for k, v in anchors_raw.items() if k != "_meta" and isinstance(v, list)}
+    # signal_anchors.json nests as {rule_id: {"signals": {signal_name: {"anchors": [...]}}}}.
+    # Flatten to {rule_id: [anchor, ...]} so the keys align with attack_prompts.json's
+    # `expected_violation` labels (FINRA_2111, SEC_REG_BI, ...). Production keys by
+    # inner signal_name instead, but this script scores rule-level detection.
+    anchors: dict[str, list[str]] = {}
+    for rule_id, rule_def in anchors_raw.items():
+        if rule_id.startswith("_") or not isinstance(rule_def, dict):
+            continue
+        for sig_def in rule_def.get("signals", {}).values():
+            anchor_texts = sig_def.get("anchors", [])
+            if anchor_texts:
+                anchors.setdefault(rule_id, []).extend(anchor_texts)
     return normal, attacks, anchors
 
 
@@ -167,8 +182,8 @@ def _compute_similarities(
     }
 
 
-def _eval_z(sims: dict[str, Any], z: float) -> dict[str, Any]:
-    """Sweep one Z value: derive per-signal thresholds, predict, score."""
+def _eval_zf(sims: dict[str, Any], z: float, floor: float) -> dict[str, Any]:
+    """Sweep one (Z, floor) pair: derive per-signal thresholds, predict, score."""
     signals = sims["signals"]
     sim_n = sims["sim_normal_sig"]
     sim_a = sims["sim_attack_sig"]
@@ -176,7 +191,7 @@ def _eval_z(sims: dict[str, Any], z: float) -> dict[str, Any]:
 
     # Derive thresholds (production parity)
     theta = {
-        sig: max(float(sim_n[sig].mean() + z * sim_n[sig].std()), THETA_FLOOR)
+        sig: max(float(sim_n[sig].mean() + z * sim_n[sig].std()), floor)
         for sig in signals
     }
 
@@ -210,6 +225,7 @@ def _eval_z(sims: dict[str, Any], z: float) -> dict[str, Any]:
 
     return {
         "z": z,
+        "floor": floor,
         "theta": theta,
         "per_class": per_class,
         "macro_f1": macro_f1,
@@ -237,23 +253,36 @@ def main() -> None:
     print(f"Corpus sizes: normal={len(normal)}  attack={len(attacks)}  signals={len(anchors)}")
     sims = _compute_similarities(normal, attacks, anchors, models)
 
-    # ── Z sweep ──────────────────────────────────────────────────────
-    print("\n=== Z_SCORE_THRESHOLD sweep ===")
-    z_results = [_eval_z(sims, z) for z in Z_CANDIDATES]
-    print(f"{'Z':>6} {'macro_F1':>10}   per-signal F1")
-    for r in z_results:
-        per_sig = "  ".join(
-            f"{c[:6]}={r['per_class'][c]['F1']:.2f}"
-            for c in sorted(r["per_class"])
-            if c != "LEGAL_NORMAL"
-        )
-        print(f"  {r['z']:.2f}    {r['macro_f1']:.3f}    {per_sig}")
+    # ── Z × floor sweep ──────────────────────────────────────────────
+    print("\n=== (Z_SCORE_THRESHOLD × THETA_FLOOR) sweep ===")
+    grid = [_eval_zf(sims, z, fl) for z in Z_CANDIDATES for fl in FLOOR_CANDIDATES]
 
-    best_z = max(z_results, key=lambda r: r["macro_f1"])
-    print(f"\n  Best Z by macro-F1: {best_z['z']}  (F1={best_z['macro_f1']:.3f})")
-    print(f"  Derived thresholds (≥ {THETA_FLOOR} floor):")
-    for sig, theta in sorted(best_z["theta"].items()):
-        print(f"    {sig:25}  θ = {theta:.3f}")
+    # Print macro-F1 as a Z × floor grid
+    header = "  Z \\ floor  " + "  ".join(f"{fl:>6.2f}" for fl in FLOOR_CANDIDATES)
+    print(header)
+    print("  " + "-" * (len(header) - 2))
+    for z in Z_CANDIDATES:
+        row_cells = []
+        for fl in FLOOR_CANDIDATES:
+            r = next(x for x in grid if x["z"] == z and x["floor"] == fl)
+            row_cells.append(f"{r['macro_f1']:>6.3f}")
+        print(f"  Z={z:<6.2f}   " + "  ".join(row_cells))
+
+    best_zf = max(grid, key=lambda r: r["macro_f1"])
+    print(
+        f"\n  Best (Z, floor) by macro-F1: Z={best_zf['z']}, floor={best_zf['floor']:.2f}  "
+        f"(F1={best_zf['macro_f1']:.3f})"
+    )
+    print(f"  Per-signal F1 at best pair:")
+    for c in sorted(best_zf["per_class"]):
+        if c == "LEGAL_NORMAL":
+            continue
+        m = best_zf["per_class"][c]
+        print(f"    {c:25}  P={m['P']:.2f}  R={m['R']:.2f}  F1={m['F1']:.2f}  n={m['n']}")
+    print(f"  Derived thresholds (≥ {best_zf['floor']} floor):")
+    for sig, theta in sorted(best_zf["theta"].items()):
+        floored = " (floor)" if abs(theta - best_zf["floor"]) < 1e-6 else ""
+        print(f"    {sig:25}  θ = {theta:.3f}{floored}")
 
     # ── W sweep ──────────────────────────────────────────────────────
     print("\n=== WHITELIST_THRESHOLD sweep ===")
@@ -274,7 +303,8 @@ def main() -> None:
 
     # ── Recommendation ───────────────────────────────────────────────
     print("\n=== Recommendation ===")
-    print(f"  Set Z_SCORE_THRESHOLD = {best_z['z']}  in app/auditor/signal_detector.py")
+    print(f"  Set Z_SCORE_THRESHOLD = {best_zf['z']}  in app/auditor/signal_detector.py")
+    print(f"  Set floor literal = {best_zf['floor']}  (max(computed, FLOOR) at line ~124)")
     if acceptable:
         print(f"  Set WHITELIST_THRESHOLD = {best_w['w']}  in app/auditor/signal_detector.py")
     else:
@@ -283,8 +313,8 @@ def main() -> None:
         "\nNote: the production detector chunks each prompt and takes the MAX "
         "anchor sim over (anchors × chunks).  This script uses a centroid + "
         "single-shot sim as a proxy — directionally correct, but absolute F1 "
-        "may differ slightly from a full test_bench.py run.  Use the picks as "
-        "a starting point and validate with test_bench.py afterwards."
+        "may differ slightly from a full test_bench/test_bench.py run.  Use the picks as "
+        "a starting point and validate with test_bench/test_bench.py afterwards."
     )
 
 

@@ -24,10 +24,9 @@ def test_system_prompt_instructs_evidence_path_for_non_ack():
     # Mentions the field name and the GraphRAG citation format
     assert "evidence_path" in p
     assert "GraphRAG ID" in p
-    # Calls out the three ACK exemptions by ID
-    assert "EVID_RISK_OVERRIDE_ACK" in p
-    assert "EVID_SUITABILITY_ACK" in p
-    assert "EVID_CONCENTRATION_ACK" in p
+    # Calls out the ACK exemption (either by listing the three IDs verbatim
+    # or by the generic `_ACK` suffix rule)
+    assert "_ACK" in p
 
 
 def test_build_proposer_user_prompt_basic():

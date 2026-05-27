@@ -17,11 +17,13 @@ from app.auditor.models import ConstraintDelta, FailedRuleDetail
 from app.auditor.risk_scoring import (
     DEFAULT_OMEGA,
     DEFAULT_RULE_WEIGHTS,
+    INTENT_BASED_RULES,
     LAMBDA_TRADE_SIZE_SCALING,
     RuleRiskComponent,
     SBC_GATE_AUTO,
     SBC_GATE_ESCALATE,
     SBCRiskScore,
+    TSF_INTENT_FLOOR,
     classify_gate_decision,
     classify_risk,
     compute_audit_risk,
@@ -246,6 +248,85 @@ def test_compute_audit_risk_defaults_evidence_scores_to_empty():
     risk = compute_audit_risk(ConstraintDelta(allow=False, failed_details=[detail]),
                               [], 10.0, 100.0, evidence_scores=None)
     assert risk.components[0].evidence_coverage == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Intent-based TSF floor — guards against the regression where the natural
+# TSF collapses to ~0 when the Proposer outputs a placeholder $1 trade size
+# on an inherently intent-based violation (conflict of interest, suitability,
+# wash-sale intent).  Also covers the branch on line 433 — a previous version
+# of this code referenced an undefined `is_binary` variable and would crash
+# whenever an INTENT_BASED rule with bypass_tsf=False reached this path.
+# ---------------------------------------------------------------------------
+
+def test_intent_based_rule_floors_tiny_tsf():
+    """Tiny trade on an INTENT_BASED rule (bypass_tsf=False) → TSF clamps to
+    TSF_INTENT_FLOOR even though the natural value would be ~0."""
+    rule_id = next(iter(INTENT_BASED_RULES))
+    detail = FailedRuleDetail(rule_id=rule_id, clause_id="X", description="d",
+                              missing_evidence_id="EV")
+    risk = compute_audit_risk(
+        ConstraintDelta(allow=False, failed_details=[detail]),
+        [], trade_size_usd=1.0, total_equity_usd=500_000.0,
+    )
+    assert risk.components[0].trade_size_factor == TSF_INTENT_FLOOR
+
+
+def test_intent_based_rule_no_floor_when_natural_tsf_above_floor():
+    """Large trade on an INTENT_BASED rule → natural TSF (already > floor)
+    is preserved, the inner `tsf < TSF_INTENT_FLOOR` branch is False."""
+    rule_id = next(iter(INTENT_BASED_RULES))
+    detail = FailedRuleDetail(rule_id=rule_id, clause_id="X", description="d",
+                              missing_evidence_id="EV")
+    risk = compute_audit_risk(
+        ConstraintDelta(allow=False, failed_details=[detail]),
+        [], trade_size_usd=80_000.0, total_equity_usd=100_000.0,
+    )
+    tsf = risk.components[0].trade_size_factor
+    assert tsf > TSF_INTENT_FLOOR
+    assert tsf == pytest.approx(1.0 - math.exp(-LAMBDA_TRADE_SIZE_SCALING * 0.8), abs=1e-4)
+
+
+def test_intent_based_rule_with_bypass_tsf_skips_floor_branch():
+    """bypass_tsf=True short-circuits the outer condition before
+    `rule_id in INTENT_BASED_RULES` is evaluated — TSF stays at 1.0."""
+    rule_id = next(iter(INTENT_BASED_RULES))
+    detail = FailedRuleDetail(rule_id=rule_id, clause_id="X", description="d",
+                              bypass_tsf=True)
+    risk = compute_audit_risk(
+        ConstraintDelta(allow=False, failed_details=[detail]),
+        [], trade_size_usd=1.0, total_equity_usd=500_000.0,
+    )
+    assert risk.components[0].trade_size_factor == 1.0
+
+
+def test_non_intent_rule_does_not_floor_tsf():
+    """A rule outside INTENT_BASED_RULES → outer condition False on the
+    `rule_id in …` clause, no floor applied."""
+    rule_id = "UNRELATED_RULE_NOT_IN_INTENT_SET"
+    assert rule_id not in INTENT_BASED_RULES
+    detail = FailedRuleDetail(rule_id=rule_id, clause_id="X", description="d",
+                              missing_evidence_id="EV", weight=0.5)
+    risk = compute_audit_risk(
+        ConstraintDelta(allow=False, failed_details=[detail]),
+        [], trade_size_usd=1.0, total_equity_usd=500_000.0,
+    )
+    tsf = risk.components[0].trade_size_factor
+    assert tsf < TSF_INTENT_FLOOR
+    assert tsf == pytest.approx(1.0 - math.exp(-LAMBDA_TRADE_SIZE_SCALING * 1.0 / 500_000.0), abs=1e-6)
+
+
+def test_intent_based_floor_logs_application(caplog):
+    """When the floor binds, a logger.info line records the lift."""
+    rule_id = next(iter(INTENT_BASED_RULES))
+    detail = FailedRuleDetail(rule_id=rule_id, clause_id="X", description="d",
+                              missing_evidence_id="EV")
+    with caplog.at_level("INFO", logger="app.auditor.risk_scoring"):
+        compute_audit_risk(
+            ConstraintDelta(allow=False, failed_details=[detail]),
+            [], trade_size_usd=1.0, total_equity_usd=500_000.0,
+        )
+    assert any("Intent-based TSF floor applied" in r.message for r in caplog.records)
 
 
 def test_compute_audit_risk_logs_weakest_link_for_multi_evidence(caplog):

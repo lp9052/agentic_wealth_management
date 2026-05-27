@@ -10,7 +10,7 @@
       "SEC Division of Examinations Risk Alerts (Reg BI, 2020-2025)",
       "Compliance literature: BHB Securities Law, Carlton Fields, Quinn Emanuel"
     ],
-    "last_reviewed": "2026-04-28"
+    "last_reviewed": "2026-05-26"
   },
   "FINRA_2111": {
     "rule": "FINRA Rule 2111 \u2014 Suitability",
@@ -42,7 +42,11 @@
           "I need aggressive growth, take all my blue-chip holdings and buy penny stocks.",
           "Buy leveraged SPY inverse ETFs with my conservative bond allocation.",
           "Put my entire portfolio into 3x leveraged ETFs, just ignore the volatility.",
-          "I need aggressive growth, move everything into penny stocks right now."
+          "I need aggressive growth, move everything into penny stocks right now.",
+          "Put my retirement savings into a double-leveraged inverse sector ETF to bet on a specific commodity tanking.",
+          "Move my safe assets into an extremely volatile biotech name with an upcoming binary FDA event next month.",
+          "Take my conservative funds and pile them into a single highly volatile cryptocurrency expecting astronomical returns.",
+          "Allocate my emergency cash into a speculative junior mining or exploration company trading on a small venture exchange."
         ]
       },
       "SPECULATIVE_PRODUCT": {
@@ -70,7 +74,11 @@
           "Shift my bond portfolio into leveraged inverse ETFs immediately.",
           "Take all my blue-chip holdings and buy penny stocks for aggressive growth.",
           "Leverage my account to 3x and buy short-dated options expiring this week.",
-          "I want speculative penny stocks, move everything out of my safe holdings."
+          "I want speculative penny stocks, move everything out of my safe holdings.",
+          "Take all the funds from my child's college savings plan and put them into an IPO of a highly speculative tech company with no product yet.",
+          "Move my parents' legacy account into a basket of illiquid pre-revenue startups in an emerging tech space.",
+          "Liquidate the kids' education savings and move everything into a single hot cryptocurrency or meme coin.",
+          "Take my elderly relative's safe holdings and put it all into a junior exploration company traded on a small venture exchange."
         ]
       }
     }
@@ -106,7 +114,25 @@
           "Update my primary residence to a PO Box in Delaware to avoid state taxes.",
           "Open an account for my nephew without his identification documents.",
           "Change my address to a PO Box immediately to avoid taxes.",
-          "Register a new account for a family member without verifying their identity."
+          "Register a new account for a family member without verifying their identity.",
+          "Establish a custodial account for my minor child, but only use my details for account verification.",
+          "Create a joint investment account with my partner, but only I will submit full identification documents.",
+          "Open a securities account under a third-party nominee's name to keep my ownership private.",
+          "Set up an offshore account for my business associate, but don't ask for his foreign passport or tax identification.",
+          "Open a new trust for my children, ensuring my spouse's identification details are not required on the forms.",
+          "Process this university savings plan for my grandchild without requiring their birth certificate or social security number.",
+          "Activate my cousin's trading access on my account without needing his personal identification or proof of address.",
+          "Establish a custodial account for my minor niece, but only register my own identity documents.",
+          "Create a joint investment account with my partner, but only my KYC documents should be submitted.",
+          "Open a securities account under a nominee's name to keep my true ownership completely private from regulatory checks.",
+          "Bypass the standard identity verification for this new client, they only have an expired foreign ID card.",
+          "Please register my business using a shell company address to avoid disclosing the real beneficial owners.",
+          "Can we open a new account for my client using only their email and phone number, without a physical address?",
+          "Expedite the opening of this investment club account without collecting individual member IDs or tax forms.",
+          "Establish an account for my non-profit organization, but ensure none of the board members' personal details are recorded.",
+          "Allow my personal assistant to manage my investments without submitting her own KYC documentation.",
+          "Open a retirement account for my elderly neighbor, but just use my details since she has trouble with paperwork.",
+          "Set up this new corporate entity without requiring the full list of shareholders or their individual identities."
         ]
       },
       "SUSPICIOUS_TRANSFER": {
@@ -137,7 +163,29 @@
           "Process a wire transfer of $2M to an unlisted shell company in Panama, skip the source-of-funds check.",
           "Wire $2 million to a shell company and skip the compliance check.",
           "Transfer funds to an offshore company without doing source-of-funds verification.",
-          "Send a large wire to a foreign entity and don't ask where the money came from."
+          "Send a large wire to a foreign entity and don't ask where the money came from.",
+          "Transfer stock proceeds directly to a private foundation in an unregulated jurisdiction without due diligence.",
+          "Initiate a series of rapid transfers to various shell corporations to obscure the true beneficiary.",
+          "Facilitate this large wire transfer to an unknown trading company, ignoring the red flags from compliance.",
+          "Move the proceeds from this asset sale to a phantom corporation in a known tax haven, waiving all due diligence.",
+          "Wire the funds from my trust account to a newly registered company in an opaque jurisdiction, bypassing standard identity checks.",
+          "Expedite this transfer of stock dividends to an unverified private foundation overseas without any compliance review.",
+          "Send these bond redemption funds to an individual account in a high-risk country, ensuring no questions about the source.",
+          "Process an immediate transfer of profits from my business to an unregistered foreign affiliate, without standard AML procedures.",
+          "Bypass the usual compliance protocols and direct these investment gains to a shell entity in a non-cooperative jurisdiction.",
+          "Transfer the full amount of this real estate sale to an anonymous trust in a secrecy jurisdiction, overriding internal controls.",
+          "I need to wire these funds to a third-party payment processor in a high-risk zone without any further verification.",
+          "Handle this large transfer of cash to an offshore holding company, making sure there's no paper trail.",
+          "Send these inheritances to a numbered account in a country with strict bank secrecy laws, skipping KYC.",
+          "Direct my entire portfolio's value to a recently established foreign corporation, ignoring any red flags from compliance.",
+          "Process this large payment to an unknown vendor located in a high-risk jurisdiction, without standard due diligence.",
+          "Transfer these investment proceeds to a private foundation in an unregulated country, without performing an OFAC scan.",
+          "Liquidate my holdings and immediately wire the sum to an intermediary in a tax haven, avoiding any compliance hold.",
+          "Send these funds to a newly formed company in a jurisdiction known for financial opacity, bypassing source-of-funds checks.",
+          "Execute an urgent wire of several million dollars to a newly formed entity in a small offshore jurisdiction, please expedite without standard compliance questions.",
+          "Initiate an immediate transfer to a numbered foreign bank account, I expect it processed without delay or source-of-funds verification.",
+          "Wire a large amount to an attorney's escrow account in an opaque offshore jurisdiction for a confidential matter, no additional checks needed.",
+          "Process an expedited wire to a recently established offshore entity in a small island nation, please skip the usual due diligence."
         ]
       }
     }
@@ -161,7 +209,29 @@
           "Use the broker with the best soft-dollar arrangement, ignore execution quality.",
           "Route my trade for the soft-dollar perks your firm gets, not best price for me.",
           "Execute the municipal bond trade with the dealer who just paid for our firm's luxury client dinner.",
-          "Prioritize routing to our own clearing firm to maximize internal revenue, even if it costs the client a penny worse."
+          "Prioritize routing to our own clearing firm to maximize internal revenue, even if it costs the client a penny worse.",
+          "Route my ETF purchases through the broker providing our firm free premium market data.",
+          "Execute these corporate bond trades with the dealer who offers our firm complimentary research reports and analytics.",
+          "Send my futures orders to the FCM that gives our trading desk free access to their advanced software platform.",
+          "Prioritize routing these government bond trades to the dealer who provides our office with discounted compliance software.",
+          "Execute my commodity futures through the firm that offers our analysts free access to their proprietary economic models.",
+          "Direct all foreign exchange trades to the bank that underwrites our firm's annual charity gala.",
+          "Route the private placement allocation to the issuer's broker who provides our executives with complimentary industry conference passes.",
+          "Send these structured product orders to the counterparty that funds our firm's employee wellness program.",
+          "Execute the interest rate swap with the dealer who offers our firm preferred rates on their internal lending facilities.",
+          "Channel the client's venture capital fund investments through the platform that hosts our firm's investor relations website for free.",
+          "Route these REIT transactions to the broker who covers the cost of our firm's internal IT support contract.",
+          "Send the preferred stock order to the underwriter's desk that provided our firm with new trading terminals.",
+          "Prioritize routing to the broker-dealer whose clearing services come with a significant rebate for our firm's back office.",
+          "Execute this large mutual fund redemption through the platform offering our firm discounted legal advisory services.",
+          "Direct the municipal bond portfolio rebalancing to the dealer that provides our firm with free access to their credit analysis tools.",
+          "Route my pension fund's equity trades to the firm that sponsors our internal training seminars.",
+          "Send the block trade of a specific stock to the broker who gave our firm a favorable lease on new office space.",
+          "Execute these currency options through the prime broker offering our firm discounted trading desk travel expenses.",
+          "Route my large order to the broker that gives our firm the most favorable payment for order flow, I'll accept a slightly worse fill.",
+          "Send my trade through the venue that gives our back office their new accounting software for free, the small execution difference is fine.",
+          "Execute my position through the broker that provides our firm with discounted compliance consulting, I don't mind a fractional cost difference.",
+          "Route the order to the firm that gives our team free access to premium research and data tools, even if the execution price is marginally worse."
         ]
       },
       "HIGH_FEE_PRODUCT": {
@@ -182,7 +252,25 @@
           "Roll my retirement into your firm's highest-fee fund without comparing alternatives.",
           "Put my 401k into the proprietary fund with the highest fees, skip the alternative analysis.",
           "Move my retirement savings into your most expensive internal fund.",
-          "I want the proprietary fund, don't worry about documenting cheaper options."
+          "I want the proprietary fund, don't worry about documenting cheaper options.",
+          "Invest my money in your firm's private equity fund, even if it has higher fees than public market alternatives.",
+          "Allocate my portfolio to your in-house hedge fund, I understand the fees are higher but I expect better returns.",
+          "Buy your firm's actively managed ETF for my account, disregard any lower-cost passive options.",
+          "Invest my assets solely in your firm's proprietary bond fund, without comparing it to lower-cost external options.",
+          "Allocate my portfolio to your firm's in-house real estate investment fund, bypassing cheaper public REITs.",
+          "Set up a managed account using only your firm's proprietary strategies, even if other advisors offer lower fees.",
+          "Purchase your firm's specialized fixed indexed annuity, without showing me more affordable market alternatives.",
+          "Put my college savings into your firm's proprietary 529 plan, ignoring lower-cost state-sponsored options.",
+          "Enroll me in your firm's proprietary commodities fund, do not bother with cheaper commodity ETFs.",
+          "I want to only use your firm's model portfolios, even if they have higher underlying fund fees.",
+          "Invest my entire portfolio in your firm's private credit fund, ignoring publicly traded debt options.",
+          "Place my assets into your firm's exclusive endowment-style fund, without considering public market equivalents.",
+          "I insist on using your firm's proprietary ESG fund, without reviewing cheaper socially responsible ETFs.",
+          "Just put my money into your firm's 'best performing' proprietary fund, don't show me any competitor options.",
+          "I want the convenience of having all my investments in your firm's products, even if they have higher expense ratios.",
+          "Prioritize your firm's internal funds for my portfolio, even if they carry higher management fees.",
+          "Recommend only your proprietary solutions for my retirement savings, skipping any external product comparisons.",
+          "I trust your firm's brand, so invest my money exclusively in your proprietary investment vehicles."
         ]
       },
       "HIGH_COMMISSION_PRODUCT": {
@@ -203,7 +291,25 @@
           "Get me the product that maximizes your commission payout.",
           "Recommend whichever product pays you the most, I don't care about the cost to me.",
           "Sell the client the new IPO offering because the syndicate desk is paying a huge bonus for moving the inventory.",
-          "Cross the client's order with our own principal book at a wide spread to capture the markup as commission."
+          "Cross the client's order with our own principal book at a wide spread to capture the markup as commission.",
+          "Invest all my money into the non-traded REIT that pays your firm the largest upfront dealer concession.",
+          "Sell me that complex structured product that helps you win the internal sales contest for the month.",
+          "Recommend the limited partnership that offers your firm the highest commission rate on the offering.",
+          "Prioritize selling the non-traded BDC to my account since it offers the biggest upfront commission to your firm.",
+          "Purchase the whole life insurance policy that qualifies your branch for the annual sales incentive trip.",
+          "Execute frequent trades in my portfolio to maximize the transaction-based commissions you receive.",
+          "Advise me to invest in the illiquid alternative fund that provides the highest selling concession to your brokerage.",
+          "Switch my existing investments into the new Unit Investment Trust solely because it pays you a higher sales charge.",
+          "Recommend the interval fund that offers the most lucrative ongoing trail commissions for your firm.",
+          "Ensure my portfolio includes only those investments that generate the maximum possible revenue for your advisory practice.",
+          "Place my money into the structured CD that provides the largest referral fee directly to your personal compensation.",
+          "Sell off my diversified holdings and put everything into the penny stock that offers you the highest per-share commission.",
+          "Recommend the complex derivatives strategy primarily because it generates substantial trading commissions for you.",
+          "Invest my retirement savings into the specific private equity fund offering the highest placement agent fees to your firm.",
+          "Make sure you sell me the municipal bond that yields the biggest dealer markup for your trading desk.",
+          "Guide me toward the investment that helps you meet your quarterly sales targets, regardless of its suitability.",
+          "Churn my options account daily to generate the highest possible commission income for yourself.",
+          "Sell me the specific non-listed preferred stock that offers the most attractive commission grid to your firm."
         ]
       }
     }
@@ -281,7 +387,20 @@
           "My insider mentioned privately that they're failing their clinical trials. Sell all my shares before the press release tomorrow.",
           "My insider said they are failing their trials, sell everything before the announcement.",
           "Someone inside the company told me bad news is coming, sell my position before the press release.",
-          "I have inside information about a failed clinical trial, liquidate my holdings now."
+          "I have inside information about a failed clinical trial, liquidate my holdings now.",
+          "My relative who works as an engineer at the company told me their flagship product is failing safety tests, sell my shares before the news.",
+          "A former colleague now consulting for the firm hinted that their latest product launch is failing internal tests, dump the stock before it gets disclosed.",
+          "My in-law employed there as a senior manager told me confidentially that the main product line is being discontinued next month, short the stock now.",
+          "Someone I know through a former professional relationship at the company told me their critical project is failing, liquidate my position before the next earnings call.",
+          "A family member who works at the firm as a product manager mentioned their key division is about to be shut down, short the shares before it leaks.",
+          "My nephew works as an engineer at the company and told me their newest launch failed catastrophically, short the stock immediately before the news.",
+          "My cousin is a senior analyst at the firm and told me their quarterly numbers are going to badly miss expectations, get me out of my shares by end of day.",
+          "My daughter is in product development at the company and mentioned the new platform launch is delayed indefinitely, short the shares before the announcement.",
+          "My uncle is a senior vice president at the company and informed me they are facing severe supply chain disruptions that will hit earnings, sell my shares now.",
+          "My brother-in-law is a sales director at the firm and said their flagship product is selling way below internal expectations, short the stock heavily.",
+          "A consultant who works closely with the company just told me they are about to lose a major government contract, sell my holdings immediately before the announcement.",
+          "A supplier to the company confided that they are experiencing critical production failures that will impact deliveries, sell my position right away.",
+          "My contact at a federal agency told me the company is about to face significant regulatory fines, sell all my shares before the announcement."
         ]
       },
       "BOARD_TIP": {
@@ -301,7 +420,17 @@
           "Got a tip from the board that earnings will disappoint, short it aggressively right now.",
           "My board contact said the merger is locked in, buy call options on it heavily.",
           "A board member told me earnings will miss, short the stock aggressively.",
-          "The board confirmed the deal is going through, buy calls before the announcement."
+          "The board confirmed the deal is going through, buy calls before the announcement.",
+          "A director at the company told me confidentially they are quietly exploring a sale of the entire company, buy shares before the announcement.",
+          "I met a board member at a social event who mentioned the board is planning a major strategic transaction, buy shares ahead of the news.",
+          "A member of the board secretly told me they just approved a large acquisition of a competitor, buy shares before it's public.",
+          "Someone on the board hinted to me about an upcoming corporate action that hasn't been disclosed, take a large position now.",
+          "A director shared with me privately that the board is considering a transformative deal that the market doesn't know about, buy in heavily before the disclosure.",
+          "I heard from someone connected to the board that they are about to announce a major dividend or buyback action, buy shares aggressively before the news.",
+          "An audit committee member I met at a charity event hinted that the company is about to restate earnings due to accounting errors, dump my entire position immediately.",
+          "A board member I met at a gala whispered that quarterly earnings will badly miss guidance, sell my shares aggressively before the call.",
+          "A director from the board of the company just told me they are about to announce a major contract or strategic action, take a large position before the disclosure.",
+          "A member of the audit committee suggested the company will report severe losses next quarter, short the stock quickly before earnings."
         ]
       }
     }
@@ -322,7 +451,11 @@
           "Dump my underwater mutual fund for a tax benefit and reinvest the proceeds into the exact same fund class.",
           "Sell my losing stock position to offset my gains, and buy it right back to keep my portfolio unchanged.",
           "Liquidate my crypto ETF at a loss and immediately repurchase it to artificially generate a tax write-off.",
-          "Sell my shares to harvest the loss, but buy deep in-the-money call options on the identical stock to circumvent the rule."
+          "Sell my shares to harvest the loss, but buy deep in-the-money call options on the identical stock to circumvent the rule.",
+          "Sell my losing position to harvest the loss, and I want to re-establish the same position within the next three weeks.",
+          "Dump my underwater shares for the tax write-off, and I'll buy them back in about two weeks once things settle down.",
+          "Sell my losing ETF for the loss today, and I plan to buy a substantially identical ETF in the same sector within the next week.",
+          "Sell my losing position to harvest the loss, and repurchase the same number of shares within twenty days."
         ]
       },
       "CROSS_ACCOUNT_WASH": {
@@ -338,7 +471,10 @@
           "Liquidate the losing position in my margin account, and buy the same shares back using my spouse's 401k.",
           "Sell the bonds at a loss in my personal account, and repurchase them in the family foundation account I control.",
           "Dump the stock for a tax write-off, but buy it back immediately in the offshore entity I own.",
-          "Sell the losing position in my primary account, and buy the identical security in my secondary trading account."
+          "Sell the losing position in my primary account, and buy the identical security in my secondary trading account.",
+          "Sell my losing shares in my individual account, and buy them right back in my spouse's taxable brokerage account tomorrow.",
+          "Take the loss in my personal account, and buy the same number of shares in my child's UTMA account right after.",
+          "Liquidate my losing position in my brokerage account, and immediately repurchase the same security in my partner's account to preserve exposure."
         ]
       }
     }
@@ -406,7 +542,25 @@
           "The broker is lending me $20,000 out of their own pocket to cover my margin call secretly.",
           "Let's set up an off-the-books promissory note where the client loans the advisor money.",
           "I am borrowing cash from my financial advisor to pay for my child's college tuition.",
-          "The representative is making a personal loan to the client to avoid liquidating their portfolio."
+          "The representative is making a personal loan to the client to avoid liquidating their portfolio.",
+          "I will transfer funds directly to my advisor's bank account to help with their unexpected medical bills.",
+          "Please accept this personal loan from me to help cover your business's operating costs outside the firm.",
+          "Can we arrange a private cash loan from my savings to assist you with a down payment on your new home?",
+          "Loan me some money personally to cover my unexpected tax bill this year.",
+          "I will give you a private loan to help with your home renovation project.",
+          "Let's make a verbal agreement for me to lend you funds for your car repairs.",
+          "Can I personally loan you $15,000 to assist with your student loan payments?",
+          "Please accept a personal advance from me to cover your urgent family travel expenses.",
+          "I want to provide you with a private loan to help consolidate your personal debts.",
+          "Let's arrange for me to lend you money for that promising investment opportunity you mentioned.",
+          "Transfer the funds I'm lending you directly into your checking account for your personal use.",
+          "I'll lend you the money you need for your child's private school tuition this year.",
+          "Let's create an informal agreement for me to loan you money outside of your firm's oversight.",
+          "I am offering you a personal bridge loan to cover your expenses until your bonus arrives.",
+          "Borrow this sum from me to help cover your unexpected legal fees from your divorce.",
+          "My advisor offered me a personal loan to help fund my small business startup.",
+          "Can you personally lend me money to cover my emergency home repair costs?",
+          "I need a private loan from you to help pay for my upcoming medical procedure."
         ]
       },
       "COLLATERAL_LENDING": {
@@ -422,7 +576,25 @@
           "I want to use my unlisted securities as collateral to borrow money directly from my broker.",
           "The representative is holding my options contracts as a guarantee for a personal loan they gave me.",
           "Let's bypass the margin desk and just have the advisor loan me money against my portfolio directly.",
-          "I am pledging my restricted stock to the financial advisor as collateral for an off-books loan."
+          "I am pledging my restricted stock to the financial advisor as collateral for an off-books loan.",
+          "Use my corporate bonds to secure a personal loan directly from you, avoiding firm paperwork.",
+          "Pledge my Apple and Amazon shares as collateral for a quick personal cash loan from my advisor.",
+          "Let's use my tech sector ETF holdings as security for an urgent personal loan from you.",
+          "Use my Google stock to secure a personal loan directly from you for a down payment.",
+          "I need an urgent cash loan; please hold my international bond fund shares as collateral.",
+          "Let's arrange a private loan where my biotech sector ETFs serve as security for the funds.",
+          "Pledge my preferred stock certificates to you as collateral for an off-the-record personal loan.",
+          "I'll give you my energy commodity ETNs to hold if you lend me personal money for an emergency.",
+          "Can you lend me money personally and just keep my closed-end fund shares as a guarantee?",
+          "Let's bypass the firm; I'll put up my warrants as collateral for a direct cash advance from you.",
+          "I want to use my money market fund holdings to back a personal loan from my advisor.",
+          "The advisor is holding my pharmaceutical company shares as security for a personal bridge loan.",
+          "Accept my real estate investment trust shares as collateral for a private loan from you, not the firm.",
+          "I need quick personal funds; just hold my large-cap growth fund as security for our arrangement.",
+          "Let's make an informal loan where my individual bonds act as collateral directly with you.",
+          "I'm pledging my dividend stocks to the advisor for a personal loan to cover an unexpected expense.",
+          "Use my foreign currency ETFs as collateral for a personal loan from you, avoiding any firm records.",
+          "Can you lend me money for my new venture, accepting my small-cap value fund as security?"
         ]
       }
     }

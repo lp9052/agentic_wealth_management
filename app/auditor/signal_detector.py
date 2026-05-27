@@ -41,11 +41,13 @@ _NORMAL_PATH = os.path.join(
 )
 
 # Statistical boundary (Z-Score) used to set per-signal detection thresholds:
-#   θ_sig = max(mean_noise_sig + Z·std_noise_sig, 0.60)
+#   θ_sig = max(mean_noise_sig + Z·std_noise_sig, 0.54)
 # Calibrate against the expanded normal_corpus.json + attack_prompts.json
-# by running `python3 scripts/tune_thresholds.py` and pasting the
-# recommended value back here.  Floor of 0.60 hedges against unusually
-# low noise floors on signals with poor anchor coverage.
+# by running `python3 scripts/tune_thresholds.py` (sweeps Z × floor jointly)
+# and pasting the recommended values back here.  Floor of 0.54 hedges
+# against signals with unusually low noise floors while leaving room for
+# the per-signal Z-score calibration to actually take effect — the prior
+# 0.60 floor clamped every signal uniformly and made Z a dead parameter.
 Z_SCORE_THRESHOLD: float = 2.0
 
 # ── Whitelist gate threshold ────────────────────────────────────────────────
@@ -121,7 +123,7 @@ def _initialize_system():
         mean_noise = float(np.mean(max_noise))
         std_noise = float(np.std(max_noise))
         computed = mean_noise + (Z_SCORE_THRESHOLD * std_noise)
-        _signal_thresholds[signal_name] = max(computed, 0.60)
+        _signal_thresholds[signal_name] = max(computed, 0.54)
 
     logger.info(
         "Signal thresholds computed (Z=%.1f) for %d signals using Ensemble.",

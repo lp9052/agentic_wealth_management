@@ -21,6 +21,8 @@
   "derivative_markers": [
     "option", "call", "put", "strike", "expir", "0dte",
     "leveraged", "leverag", "inverse", "3x", "2x", "1x",
-    "contract", "collar", "hedge", "short"
+    "contract", "collar", "hedge", "short",
+    "penny", "pink sheet", "micro-cap", "microcap", "micro cap",
+    "meme stock", "unregistered"
   ]
 }

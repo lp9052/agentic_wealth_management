@@ -430,7 +430,7 @@ def compute_audit_risk(
         # of the request (not the trade size), ensure TSF never collapses to
         # zero just because the Proposer output a placeholder trade size.
         # Only applies to RECOVERABLE (non-binary) rules in the intent set.
-        if not is_binary and rule_id in INTENT_BASED_RULES:
+        if not bypass_tsf and rule_id in INTENT_BASED_RULES:
             if tsf < TSF_INTENT_FLOOR:
                 logger.info(
                     "Intent-based TSF floor applied for '%s': %.4f → %.4f",
