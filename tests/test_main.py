@@ -45,11 +45,12 @@ def test_propose_trade_supervised(client):
     assert body["status"] == "CERTIFIED_COMPLIANT"
 
 
-def test_propose_trade_unsupervised_default_status(client, monkeypatch):
-    """When supervisor_enabled=False and the graph returns no `status`,
-    the endpoint defaults to CERTIFIED_COMPLIANT."""
+def test_propose_trade_passes_through_graph_status(client, monkeypatch):
+    """The endpoint returns whatever terminal status the graph sets — e.g. the
+    CERTIFIED_COMPLIANT the proposer sets in unsupervised mode."""
     fake_graph = MagicMock()
-    fake_graph.invoke = MagicMock(return_value={"proposal": "ok"})
+    fake_graph.invoke = MagicMock(
+        return_value={"proposal": "ok", "status": "CERTIFIED_COMPLIANT"})
     monkeypatch.setattr(main_module, "graph", fake_graph)
 
     r = client.post("/propose-trade", json={

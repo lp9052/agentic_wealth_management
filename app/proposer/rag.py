@@ -9,6 +9,7 @@ auditor is the authoritative compliance check.
 
 import os
 import json
+import threading
 from langchain_chroma import Chroma
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_core.documents import Document
@@ -21,21 +22,39 @@ CHROMA_DIR = os.path.normpath(CHROMA_DIR)
 
 # Cached vectorstore handle — building it instantiates the Google embeddings
 # client and opens the persistent store, so we do it once and reuse it across
-# every retrieve_regulations call on a revision cycle.
+# every retrieve_regulations call on a revision cycle.  The lock makes the
+# lazy init safe under concurrent FastAPI requests hitting a cold cache (without
+# it, two requests could each construct a client and race).
 _vectorstore = None
+_vectorstore_lock = threading.Lock()
 
 
 def init_chroma():
     """Initialize (and cache) the ChromaDB vectorstore with Google embeddings."""
     global _vectorstore
     if _vectorstore is None:
-        embeddings = GoogleGenerativeAIEmbeddings(model="models/gemini-embedding-001")
-        _vectorstore = Chroma(
-            collection_name="regulations",
-            embedding_function=embeddings,
-            persist_directory=CHROMA_DIR,
-        )
+        with _vectorstore_lock:
+            # Double-checked: another thread may have built it while we waited.
+            if _vectorstore is None:
+                embeddings = GoogleGenerativeAIEmbeddings(model="models/gemini-embedding-001")
+                _vectorstore = Chroma(
+                    collection_name="regulations",
+                    embedding_function=embeddings,
+                    persist_directory=CHROMA_DIR,
+                )
     return _vectorstore
+
+
+def reset_chroma_cache():
+    """Drop the cached vectorstore handle.
+
+    Tests that ingest documents share this module-level cache; without a reset
+    the ingested collection leaks into later tests/requests.  Call this to force
+    the next init_chroma() to rebuild from disk.
+    """
+    global _vectorstore
+    with _vectorstore_lock:
+        _vectorstore = None
 
 
 def ingest_regulations():

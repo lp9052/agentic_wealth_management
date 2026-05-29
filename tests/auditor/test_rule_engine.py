@@ -246,6 +246,30 @@ def test_static_sell_sufficient_holdings():
     assert fails == []
 
 
+def test_static_sell_short_ticker_no_substring_false_match():
+    """Regression (#8): selling 'O' must NOT match a held 'Ticker: MNO' via the
+    old `ticker in asset` substring test — the client doesn't hold 'O'."""
+    assets = [{"asset": "Restricted Ticker: MNO", "value": 1_000_000.0}]
+    fails = run_static_checks(
+        _proposal(action="SELL", asset_ticker="O", trade_size_usd=1_000.0),
+        _client_state(equity=100_000.0, assets=assets),
+    )
+    assert any("does not hold" in f.description for f in fails)
+
+
+def test_static_buy_concentration_no_substring_false_match():
+    """Regression (#8): an existing 'Ticker: SPY' holding must not be counted
+    toward a BUY of the unrelated ticker 'PY' via substring matching."""
+    assets = [{"asset": "Ticker: SPY", "value": 90_000.0}]
+    fails = run_static_checks(
+        _proposal(action="BUY", asset_ticker="PY", trade_size_usd=1_000.0),
+        _client_state(equity=1_000_000.0, assets=assets),
+    )
+    # post-trade PY fraction = 1k / 1M ≈ 0.1% — far below the limit, so no
+    # concentration failure (SPY's 90k is correctly excluded)
+    assert not any(f.clause_id == "STATIC.05" for f in fails)
+
+
 def test_static_sell_empty_ticker_skips_holdings_check():
     """Empty ticker for SELL only emits the invalid-ticker failure."""
     fails = run_static_checks(_proposal(action="SELL", asset_ticker=""),
@@ -588,6 +612,40 @@ def test_evaluate_evidence_ack_fast_path_cures(evalsetup, monkeypatch):
     )
     delta, _ = _eval(prop, _client_state(equity=100_000.0), prompt=prompt)
     # ACK cures FINRA_2111
+    assert delta.gate_decision != "HUMAN_ESCALATION"
+
+
+def test_evaluate_evidence_ack_negated_scrap_does_not_cure(evalsetup, monkeypatch):
+    """Regression (#2): an ACK scrap that contains an affirmative keyword but is
+    actually a REFUSAL ("I do not agree") must NOT fast-path to C_ev=1.0 — the
+    negation suppresses the fast-path, the ACK has no evidence_path, so C_ev=0
+    and the rule still fires."""
+    monkeypatch.setattr(rule_engine, "detect_signals", lambda p: ["HIGH_RISK_PRODUCT"])
+    prompt = "buy TQQQ, I do not agree to the risk"
+    prop = _proposal(
+        trade_size_usd=80_000.0, asset_ticker="TQQQ",
+        provided_evidence=[ProvidedEvidence(
+            evidence_id="EVID_RISK_OVERRIDE_ACK", value=True,
+            scrap="I do not agree")],
+    )
+    delta, _ = _eval(prop, _client_state(equity=100_000.0), prompt=prompt)
+    assert "FINRA_2111" in delta.failed_rules
+
+
+def test_evaluate_evidence_value_false_with_grounded_scrap_is_scored(
+    evalsetup, monkeypatch
+):
+    """Regression (#9): an evidence item with value=False but a grounded
+    affirmative scrap must still be scored (not silently dropped on the boolean
+    flag) — here it cures FINRA_2111 just like the value=True fast-path."""
+    monkeypatch.setattr(rule_engine, "detect_signals", lambda p: ["HIGH_RISK_PRODUCT"])
+    prompt = "buy TQQQ, yes I agree to the risk"
+    prop = _proposal(
+        trade_size_usd=50_000.0, asset_ticker="TQQQ",
+        provided_evidence=[ProvidedEvidence(
+            evidence_id="EVID_RISK_OVERRIDE_ACK", value=False, scrap="yes I agree")],
+    )
+    delta, _ = _eval(prop, _client_state(equity=100_000.0), prompt=prompt)
     assert delta.gate_decision != "HUMAN_ESCALATION"
 
 
