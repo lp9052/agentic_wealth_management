@@ -68,10 +68,11 @@ def propose_trade(req: TradeRequest):
     final_state = graph.invoke(initial_state)
     return {
         "final_proposal": final_state.get("proposal"),
-        "status": final_state.get(
-            "status",
-            "CERTIFIED_COMPLIANT" if not req.supervisor_enabled else "UNKNOWN",
-        ),
+        # status is populated by the graph in normal runs: the auditor sets it
+        # in supervised mode, and the proposer sets CERTIFIED_COMPLIANT in
+        # unsupervised mode.  "UNKNOWN" is a defensive floor for the degenerate
+        # case where the graph returns no status at all.
+        "status": final_state.get("status", "UNKNOWN"),
         "critique": final_state.get("critique"),
         "revision_count": final_state.get("revision_count"),
         "fired_rules": final_state.get("fired_rules", []),

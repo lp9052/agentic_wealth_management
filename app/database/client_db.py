@@ -99,8 +99,13 @@ def get_client_state(client_id: str, client_data: Optional[dict] = None) -> dict
 
     # Use the explicit total_equity_usd from the vault if provided; otherwise
     # derive it from holdings so we never understate the account value.
+    # NOTE: gate on `is None`, not truthiness — an explicit 0.0 equity is a
+    # real value (a cash-less client) and must NOT be silently replaced by the
+    # holdings sum, which would inflate buying power and let an unfunded BUY
+    # pass the STATIC.01 insufficient-funds check.
+    explicit_equity = acct.get("total_equity_usd")
     total_account_value = float(
-        acct.get("total_equity_usd") or total_portfolio_value
+        explicit_equity if explicit_equity is not None else total_portfolio_value
     )
 
     account_state = {

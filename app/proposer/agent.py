@@ -69,7 +69,10 @@ def _build_rag_context(constraint_delta: dict) -> str:
         return ""
 
     regulations = _load_regulations()
-    reg_by_id = {r["id"]: r for r in regulations}
+    # Defensive: skip any malformed entry rather than KeyError out of the whole
+    # revision-cycle proposal.  All field access below also uses .get() so a
+    # partially-formed entry degrades gracefully instead of crashing.
+    reg_by_id = {r["id"]: r for r in regulations if isinstance(r, dict) and "id" in r}
 
     sections: list[str] = []
 
@@ -80,7 +83,7 @@ def _build_rag_context(constraint_delta: dict) -> str:
         for rule_id in failed_rules:
             reg_entry = reg_by_id.get(rule_id)
             query = (
-                reg_entry["text"][:200] if reg_entry else rule_id
+                (reg_entry.get("text") or rule_id)[:200] if reg_entry else rule_id
             )  # Use the rule text as the semantic query for best recall
             chunks = retrieve_regulations(query, k=2)
             for chunk in chunks:
@@ -95,8 +98,8 @@ def _build_rag_context(constraint_delta: dict) -> str:
             if entry:
                 sections.append(
                     f"[Source Link/Path: GraphRAG ID: {rule_id}]\n"
-                    f"Rule: {entry['metadata']['rule']}\n"
-                    f"Text: {entry['text']}"
+                    f"Rule: {entry.get('metadata', {}).get('rule', rule_id)}\n"
+                    f"Text: {entry.get('text', '')}"
                 )
 
     # ── 2. Related-rule graph expansion ──────────────────────────────────────
@@ -104,7 +107,7 @@ def _build_rag_context(constraint_delta: dict) -> str:
     for rule_id in failed_rules:
         entry = reg_by_id.get(rule_id)
         if entry:
-            for rel in entry["metadata"].get("related", []):
+            for rel in entry.get("metadata", {}).get("related", []):
                 if rel not in failed_rules:   # only expand to rules not already flagged
                     related_ids.add(rel)
 
@@ -114,8 +117,9 @@ def _build_rag_context(constraint_delta: dict) -> str:
             entry = reg_by_id.get(rel_id)
             if entry:
                 related_block += (
-                    f"  [Source Link/Path: GraphRAG ID: {rel_id}] ({entry['metadata']['rule']}): "
-                    f"{entry['text'][:300]}...\n"
+                    f"  [Source Link/Path: GraphRAG ID: {rel_id}] "
+                    f"({entry.get('metadata', {}).get('rule', rel_id)}): "
+                    f"{entry.get('text', '')[:300]}...\n"
                 )
         sections.append(related_block)
 
@@ -240,9 +244,11 @@ class TradeProposalSchema(BaseModel):
     def _normalize_instrument_type(cls, v: str) -> str:
         """
         Normalize loose LLM variants ('call option', 'Call_Option', 'option',
-        'stock', 'future') to a canonical member of INSTRUMENT_TYPES.  Falling
-        through means the value passes as-is to the auditor, which then trips
-        the unknown-instrument path.
+        'stock', 'future') to a canonical member of INSTRUMENT_TYPES.  An
+        unrecognized value passes through as-is (the auditor treats any
+        non-derivative instrument_type as a plain instrument); the alias table
+        therefore always resolves to a real INSTRUMENT_TYPES member rather than
+        emitting a non-canonical token like the old generic "OPTION".
 
         None and empty/whitespace values collapse to "EQUITY" so downstream
         consumers never see an empty instrument_type — this is the contract
@@ -263,7 +269,12 @@ class TradeProposalSchema(BaseModel):
             "STOCK": "EQUITY", "EQUITIES": "EQUITY", "SHARE": "EQUITY", "SHARES": "EQUITY",
             "CALL": "CALL_OPTION", "CALLS": "CALL_OPTION", "CALL_OPTIONS": "CALL_OPTION",
             "PUT": "PUT_OPTION", "PUTS": "PUT_OPTION", "PUT_OPTIONS": "PUT_OPTION",
-            "OPTION": "OPTION", "OPTIONS": "OPTION",   # generic option, kept distinct
+            # Generic, direction-less option → OTHER (a real INSTRUMENT_TYPES
+            # member).  Derivative risk is still picked up via the prompt's
+            # derivative-marker scan ("option"/"call"/"put"); "OPTION" is kept
+            # in DERIVATIVE_INSTRUMENT_TYPES only for backward-compat with any
+            # legacy/hand-built proposals that still carry that literal value.
+            "OPTION": "OTHER", "OPTIONS": "OTHER",
             "FUTURE": "FUTURES", "FUTURE_CONTRACT": "FUTURES", "FUTURES_CONTRACT": "FUTURES",
             "ETFS": "ETF", "FUND": "ETF",
             "BONDS": "BOND", "FIXED_INCOME": "BOND",
@@ -294,11 +305,37 @@ def generate_proposal(
     
     # Use native structured output (Tool Calling under the hood)
     structured_llm = llm.with_structured_output(TradeProposalSchema)
-    response: TradeProposalSchema = structured_llm.invoke([
-        SystemMessage(content=system_msg), 
-        HumanMessage(content=user_msg)
-    ])
-    
+    try:
+        response: TradeProposalSchema = structured_llm.invoke([
+            SystemMessage(content=system_msg),
+            HumanMessage(content=user_msg)
+        ])
+    except Exception as e:
+        # A malformed tool-call, an omitted required field, or a refusal raises
+        # a ValidationError / OutputParserException here.  We must not let it
+        # crash the governance graph: there's no critique or escalation to show
+        # the caller.  Fall back to a REVIEW so the loop continues (and, after
+        # MAX_ITERATIONS, escalates) rather than aborting mid-run.
+        logger.error("Structured proposal generation failed: %s", e)
+        return TradeProposal(
+            proposal_id=f"{client_id}_t_{iteration}",
+            client_id=client_id,
+            action="REVIEW",
+            asset_ticker="UNKNOWN",
+            instrument_type="EQUITY",
+            trade_size_usd=0.0,
+            rationale=(
+                "The proposer could not generate a structured proposal due to "
+                "an internal error; requesting clarification before proceeding."
+            ),
+            user_question=(
+                "I wasn't able to process that request. Could you restate what "
+                "you'd like to do?"
+            ),
+            provided_evidence=[],
+        )
+
+
     # Map back to our internal dataclass
     evidence = [
         ProvidedEvidence(

@@ -184,6 +184,29 @@ def test_generate_proposal_none_instrument_type_defaults_to_equity():
     assert out.instrument_type == "EQUITY"
 
 
+class _RaisingStructuredLLM:
+    def invoke(self, messages):
+        raise ValueError("malformed tool call")
+
+
+class _RaisingLLM:
+    def with_structured_output(self, schema):
+        return _RaisingStructuredLLM()
+
+
+def test_generate_proposal_structured_failure_falls_back_to_review():
+    """Regression (#12): a structured-output parse/validation failure must not
+    crash the proposer — it falls back to a safe REVIEW so the loop continues."""
+    out = generate_proposal(client_id="C9", client_data={}, prompt="buy SPY",
+                            llm=_RaisingLLM(), iteration=3)
+    assert isinstance(out, TradeProposal)
+    assert out.action == "REVIEW"
+    assert out.asset_ticker == "UNKNOWN"
+    assert out.proposal_id == "C9_t_3"
+    assert out.user_question != ""
+    assert out.provided_evidence == []
+
+
 def test_generate_proposal_with_constraint_delta_injects_rag_addendum(
     regulations_path, monkeypatch
 ):

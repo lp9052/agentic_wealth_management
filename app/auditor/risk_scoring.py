@@ -336,13 +336,23 @@ def _compute_trade_size_factor(
 
     S_norm = trade_size / total_equity.  No cap — math.exp handles arbitrarily
     negative inputs without overflow, so large ratios just saturate cleanly to
-    1.0.  total_equity_usd > 0 and trade_size_usd ≥ 0 are invariants enforced
-    by the upstream static checks (insufficient funds and negative-trade-size
-    are CRITICAL with bypass_tsf=True, so they fire before this function is
-    asked to evaluate a graded rule on a degenerate state).
+    1.0.
+
+    Degenerate state (total_equity_usd ≤ 0): the insufficient-funds /
+    insufficient-holdings static checks are CRITICAL with bypass_tsf=True and
+    fire as their OWN components, but they do NOT prevent a *graded* rule's
+    component from being scored on the same proposal — so this function can
+    still be asked to evaluate a graded rule against a zero-equity book.  A
+    positive trade against no equity is effectively unbounded relative to the
+    book, so it saturates to 1.0 (full portfolio at risk); a zero trade has no
+    size-driven risk, so it is 0.0.  This replaces what used to be a
+    ZeroDivisionError on that path.
     """
     if bypass:
         return 1.0
+
+    if total_equity_usd <= 0:
+        return 1.0 if trade_size_usd > 0 else 0.0
 
     s_norm = trade_size_usd / total_equity_usd
     return 1.0 - math.exp(-lam * s_norm)

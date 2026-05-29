@@ -12,7 +12,26 @@ import types
 import pytest
 
 from app.auditor import typo_filter
-from app.auditor.typo_filter import FINANCIAL_DOMAIN_TERMS, correct_typos
+from app.auditor.typo_filter import (
+    FINANCIAL_DOMAIN_TERMS,
+    _load_protected_terms,
+    correct_typos,
+)
+
+
+def test_load_protected_terms_reads_tickers_and_markers():
+    """Whitelisted tickers + single-word derivative markers are returned;
+    multi-word markers are excluded (matched at the prompt level)."""
+    terms = _load_protected_terms()
+    assert "AAPL" in terms
+    assert "option" in terms
+    assert all(" " not in t for t in terms if t in ("option", "AAPL"))
+
+
+def test_load_protected_terms_missing_config_degrades_to_empty(monkeypatch):
+    """A missing/unreadable ticker_config.json degrades to [] (no crash)."""
+    monkeypatch.setattr(typo_filter, "_TICKER_CONFIG_PATH", "/nonexistent/x.json")
+    assert _load_protected_terms() == []
 
 
 def test_financial_domain_terms_non_empty_and_contains_known_terms():
@@ -174,12 +193,13 @@ def test_correct_typos_distance_zero_means_no_correction(monkeypatch):
     assert correct_typos("hello world") == "hello world"
 
 
-def test_correct_typos_multiple_suggestions_left_unchanged(monkeypatch):
-    """>1 suggestion → ambiguous → keep original."""
+def test_correct_typos_digit_token_skipped(monkeypatch):
+    """Regression (#4): a token containing a digit ('0dte') is never corrected,
+    even when SymSpell would otherwise suggest a change."""
     typo_filter._symspell = None
-    _install_fake_symspell(monkeypatch, [("foo", 1), ("bar", 1)])
-    out = correct_typos("foox bar baz")
-    assert "foox" in out
+    _install_fake_symspell(monkeypatch, [("changed", 1)])
+    out = correct_typos("0dte trade")
+    assert "0dte" in out.split()
 
 
 def test_correct_typos_lowercase_token_correction(monkeypatch):

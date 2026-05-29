@@ -135,6 +135,31 @@ def test_compute_audit_risk_summary_tsf_normal_case():
     assert risk.trade_size_factor == pytest.approx(expected, abs=1e-4)
 
 
+def test_compute_audit_risk_graded_rule_zero_equity_positive_trade_no_crash():
+    """Regression (#5): a GRADED rule on a zero-equity client must not raise
+    ZeroDivisionError.  The per-component TSF (unlike the summary TSF) had no
+    zero-equity guard; it now saturates to 1.0 for a positive trade."""
+    detail = FailedRuleDetail(rule_id="FINRA_2111", clause_id="X",
+                              description="g", missing_evidence_id="EV")
+    risk = compute_audit_risk(
+        ConstraintDelta(allow=False, failed_details=[detail]), [],
+        trade_size_usd=50_000.0, total_equity_usd=0.0,
+    )
+    assert risk.components[0].trade_size_factor == 1.0
+
+
+def test_compute_audit_risk_graded_rule_zero_equity_zero_trade_no_crash():
+    """The zero-trade / zero-equity branch of the per-component TSF guard:
+    the divide is avoided and a component is still built (no crash)."""
+    detail = FailedRuleDetail(rule_id="FINRA_2111", clause_id="X",
+                              description="g", missing_evidence_id="EV")
+    risk = compute_audit_risk(
+        ConstraintDelta(allow=False, failed_details=[detail]), [],
+        trade_size_usd=0.0, total_equity_usd=0.0,
+    )
+    assert len(risk.components) == 1
+
+
 def test_compute_audit_risk_critical_rule_bypasses_tsf():
     """bypass_tsf=True forces TSF=1.0 even for a tiny trade."""
     detail = FailedRuleDetail(rule_id="FINRA_2090", clause_id="X",

@@ -94,3 +94,34 @@ def test_retrieve_regulations_returns_chunks(monkeypatch):
 
     out = retrieve_regulations("buy SPY", k=2)
     assert out == ["chunk one", "chunk two"]
+
+
+def test_reset_chroma_cache_clears_handle():
+    """reset_chroma_cache drops the cached handle so the next init rebuilds."""
+    rag._vectorstore = object()
+    rag.reset_chroma_cache()
+    assert rag._vectorstore is None
+
+
+def test_init_chroma_double_checked_lock_skips_rebuild(monkeypatch):
+    """Double-checked lock: if another thread builds the store while we wait on
+    the lock, the inner check returns that handle without rebuilding."""
+    rag._vectorstore = None
+    sentinel = object()
+
+    class _LockSetsCache:
+        """Simulates a competing thread by populating the cache on acquire."""
+        def __enter__(self):
+            rag._vectorstore = sentinel
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(rag, "_vectorstore_lock", _LockSetsCache())
+
+    def _no_build(**kw):
+        raise AssertionError("init_chroma must not rebuild on the inner check")
+
+    monkeypatch.setattr(rag, "Chroma", _no_build)
+    assert init_chroma() is sentinel

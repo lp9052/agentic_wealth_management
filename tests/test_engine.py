@@ -133,6 +133,34 @@ def test_proposer_node_supervised_with_previous_context(monkeypatch, fake_propos
     assert "AAPL" in captured["prev_context"]
 
 
+def test_proposer_node_prev_context_includes_prior_evidence(monkeypatch, fake_proposal):
+    """Cleanup: the revision context carries the prior scrap + evidence_path so
+    the proposer can re-submit a cure it already had."""
+    engine._llm = MagicMock()
+    captured = {}
+    def gen(**kw):
+        captured["prev_context"] = kw.get("previous_proposal_context")
+        return fake_proposal
+    monkeypatch.setattr(engine, "generate_proposal", gen)
+    monkeypatch.setattr("app.auditor.typo_filter.correct_typos", lambda t: t)
+
+    state = {
+        "client_id": "C", "client_data": {}, "prompt": "p",
+        "supervisor_enabled": True, "revision_count": 1,
+        "proposal_json": {
+            "asset_ticker": "AAPL", "instrument_type": "EQUITY", "trade_size_usd": 5000.0,
+            "provided_evidence": [
+                {"evidence_id": "EV1", "value": True, "scrap": "client agreed",
+                 "evidence_path": "[GraphRAG ID: FINRA_2111]"},
+            ],
+        },
+    }
+    proposer_node(state)
+    assert "prior_evidence" in captured["prev_context"]
+    assert "client agreed" in captured["prev_context"]
+    assert "FINRA_2111" in captured["prev_context"]
+
+
 def test_proposer_node_skips_prev_context_when_ticker_is_unknown(monkeypatch, fake_proposal):
     engine._llm = MagicMock()
     captured = {}
@@ -162,6 +190,8 @@ def test_proposer_node_unsupervised(monkeypatch):
     out = proposer_node(state)
     assert out["proposal"] == "free-form text"
     assert out["revision_count"] == 1
+    # #6: unsupervised mode reports a terminal status, not the stale "PENDING"
+    assert out["status"] == "CERTIFIED_COMPLIANT"
 
 
 def test_proposer_node_unsupervised_with_critique(monkeypatch):
@@ -250,6 +280,32 @@ def test_auditor_node_refinement_with_missing_evidence(monkeypatch):
     assert out["status"] == "NEEDS_REVISION"
     assert "REFINEMENT" in out["critique"]
     assert "EV1" in out["critique"]
+
+
+def test_auditor_node_escalates_at_max_iterations(monkeypatch):
+    """Regression (#1): an un-converged proposal at the revision cap is audited
+    and escalated to a human block — not ended silently on NEEDS_REVISION."""
+    monkeypatch.setattr(engine, "evaluate_proposal",
+                        lambda *a, **kw: _fake_delta_risk("REFINEMENT", 0.5, failed=["R"]))
+    monkeypatch.setattr(engine, "get_client_state", lambda cid, data: {})
+    state = {"client_id": "C", "client_data": {}, "prompt": "p",
+            "proposal_json": _proposal_json(),
+            "revision_count": MAX_ITERATIONS}
+    out = auditor_node(state)
+    assert out["status"] == "CRITICAL_BLOCK"
+    assert "Max revision budget" in out["critique"]
+
+
+def test_auditor_node_below_max_iterations_stays_refinement(monkeypatch):
+    """Below the cap, a REFINEMENT round still loops (NEEDS_REVISION)."""
+    monkeypatch.setattr(engine, "evaluate_proposal",
+                        lambda *a, **kw: _fake_delta_risk("REFINEMENT", 0.5, failed=["R"]))
+    monkeypatch.setattr(engine, "get_client_state", lambda cid, data: {})
+    state = {"client_id": "C", "client_data": {}, "prompt": "p",
+            "proposal_json": _proposal_json(),
+            "revision_count": MAX_ITERATIONS - 1}
+    out = auditor_node(state)
+    assert out["status"] == "NEEDS_REVISION"
 
 
 def test_auditor_node_review_with_auto_approve_forced_to_revision(monkeypatch):
@@ -392,9 +448,12 @@ def test_router_node_unsupervised_ends():
     assert router_node({"supervisor_enabled": False}) == END
 
 
-def test_router_node_max_iterations_ends():
+def test_router_node_max_iterations_still_audits():
+    # The final (MAX_ITERATIONS) round must still be audited, not silently
+    # ended — escalation now happens in auditor_node / compliance_router so the
+    # last proposal is never returned ungated.
     assert router_node({"supervisor_enabled": True,
-                        "revision_count": MAX_ITERATIONS}) == END
+                        "revision_count": MAX_ITERATIONS}) == "auditor_node"
 
 
 def test_router_node_default_routes_to_auditor():

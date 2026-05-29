@@ -62,6 +62,19 @@ AFFIRMATIVE_KEYWORDS: frozenset[str] = frozenset({
     "yes", "yep", "sure", "understand", "agree", "confirm", "proceed", "acknowledge",
 })
 
+# Negation cues that DISQUALIFY an otherwise-affirmative scrap from the ACK
+# fast-path.  Without this, a refusal like "I do NOT agree" / "I don't
+# understand" contains an affirmative keyword as a substring and would score a
+# perfect C_ev=1.0, fully curing the very violation the client is refusing to
+# accept.  Apostrophes are folded out before matching (don't → dont), and
+# matching is on whole words so "agree" inside "disagree" doesn't count as
+# affirmative — "disagree"/"decline"/"refuse" are listed here as negations.
+NEGATION_KEYWORDS: frozenset[str] = frozenset({
+    "no", "not", "dont", "doesnt", "didnt", "wont", "cant", "cannot", "never",
+    "refuse", "refused", "decline", "declined", "disagree", "reject", "rejected",
+    "unwilling", "against", "wouldnt", "isnt", "arent",
+})
+
 
 def _scrap_is_grounded(scrap: str, prompt: str) -> bool:
     """
@@ -180,6 +193,19 @@ CONCENTRATION_LIMIT = 0.50          # Concentration trigger threshold (51 %+ fir
 #   At 100 %: ω = 1.00 → ESCALATION at any TSF.
 
 
+def _holding_ticker(asset: str) -> str:
+    """Extract the bare ticker symbol from a vault holding's ``asset`` string.
+
+    Holdings store the symbol as e.g. "Ticker: AGG" or "Restricted Ticker: MNO"
+    — the symbol is the token after the final colon.  Returns the whole
+    (stripped, upper-cased) string when no colon is present.  Used for an
+    EXACT ticker match: a plain ``ticker in asset`` substring test falsely
+    matches short tickers against unrelated holdings (e.g. 'O' in 'MNO',
+    'PY' in 'SPY', or any ticker against the literal word 'Ticker').
+    """
+    return asset.rsplit(":", 1)[-1].strip().upper()
+
+
 def run_static_checks(
     proposal: TradeProposal,
     client_state: dict,
@@ -294,7 +320,7 @@ def run_static_checks(
         if ticker:
             existing = sum(
                 h.get("value", 0) for h in assets
-                if ticker in h.get("asset", "").upper()
+                if _holding_ticker(h.get("asset", "")) == ticker
             )
             if total_portfolio > 0:
                 post_pct = (existing + proposal.trade_size_usd) / total_portfolio
@@ -323,7 +349,7 @@ def run_static_checks(
         # STATIC.02 — Insufficient holdings
         held = sum(
             h.get("value", 0) for h in assets
-            if ticker in h.get("asset", "").upper()
+            if _holding_ticker(h.get("asset", "")) == ticker
         )
         if held <= 0:
             failures.append(FailedRuleDetail(
@@ -495,9 +521,24 @@ def _score_evidence_coverage(
     # human-readable description on every FailedRuleDetail that carries a
     # missing_evidence_id.
 
-    if is_ack and any(k in scrap.lower() for k in AFFIRMATIVE_KEYWORDS):
-        logger.info("Evidence '%s': Fast-path ACK match for scrap=%r", ev_id, scrap)
-        return 1.0
+    if is_ack:
+        scrap_lower = scrap.lower()
+        # Affirmative detection stays substring-based so morphological variants
+        # ("agreed", "confirming", "proceeding") still count.
+        has_affirmative = any(k in scrap_lower for k in AFFIRMATIVE_KEYWORDS)
+        # Negation detection is whole-word (apostrophes folded) so a refusal
+        # can't be fast-pathed.  Conservatively: any negation cue present means
+        # we fall through to semantic scoring rather than auto-curing.
+        neg_words = set(re.findall(r"\w+", re.sub(r"'", "", scrap_lower)))
+        has_negation = bool(neg_words & NEGATION_KEYWORDS)
+        if has_affirmative and not has_negation:
+            logger.info("Evidence '%s': Fast-path ACK match for scrap=%r", ev_id, scrap)
+            return 1.0
+        if has_affirmative and has_negation:
+            logger.info(
+                "Evidence '%s': ACK fast-path SUPPRESSED — negation in scrap=%r",
+                ev_id, scrap,
+            )
 
     # Cite-your-source: semantic-similarity cures require a GraphRAG citation
     # so the audit trail can verify the proposer pulled from the right rule.
@@ -669,7 +710,16 @@ def evaluate_proposal(
     # C_ev (weakest link).
     evidence_map = {e.evidence_id: (e.scrap, e.evidence_path)
                     for e in proposal.provided_evidence}
-    provided_ev_ids = {e.evidence_id for e in proposal.provided_evidence if e.value}
+    # Consider an evidence item if the proposer affirmed it (value=True) OR
+    # supplied a scrap to back it.  Gating on the boolean flag alone silently
+    # dropped a legitimately-quoted scrap whenever value happened to be False,
+    # leaving C_ev=0 and over-blocking.  Scrap quality is still fully gated
+    # downstream by grounding + semantic similarity (and ACK negation), so a
+    # weak or contradictory scrap still scores low.
+    provided_ev_ids = {
+        e.evidence_id for e in proposal.provided_evidence
+        if e.value or e.scrap.strip()
+    }
 
     evidence_scores: dict[str, float] = {}
     for ev_id in set(all_missing_evidence):

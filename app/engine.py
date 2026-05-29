@@ -106,6 +106,21 @@ def proposer_node(state: AgentState) -> dict:
                 f"  trade_size_usd : {prev_pj.get('trade_size_usd', 0)}\n"
                 f"  missing_evidence: {state.get('constraint_delta', {}).get('missing_evidence_ids', [])}"
             )
+            # Carry the prior evidence (scrap + GraphRAG citation) forward so the
+            # proposer can re-submit a cure it already had instead of having to
+            # reconstruct the exact verbatim scrap from scratch each revision.
+            prev_evidence = prev_pj.get("provided_evidence", [])
+            if prev_evidence:
+                ev_lines = "\n".join(
+                    f"    - {e.get('evidence_id', '')}: "
+                    f"scrap={e.get('scrap', '')!r} "
+                    f"evidence_path={e.get('evidence_path', '')!r}"
+                    for e in prev_evidence
+                )
+                prev_context += (
+                    "\n  prior_evidence (reuse the grounded scrap + citation "
+                    f"verbatim if still applicable):\n{ev_lines}"
+                )
 
         from app.auditor.typo_filter import correct_typos
         corrected_prompt = correct_typos(state["prompt"])
@@ -180,9 +195,14 @@ def proposer_node(state: AgentState) -> dict:
             llm=_get_llm(),
         )
 
+        # Unsupervised mode runs the proposer only — no audit gate — so the
+        # session is, by definition, auto-certified.  Set the terminal status
+        # explicitly here; without it the status stays at the initial-state
+        # "PENDING" and callers (main.py) report a stale, misleading value.
         return {
             "proposal": proposal_text,
             "revision_count": iteration,
+            "status": "CERTIFIED_COMPLIANT",
         }
 
 
@@ -249,6 +269,19 @@ def auditor_node(state: AgentState) -> dict:
     # prompt that warrants escalation should still block).
     if trade_proposal.action == "REVIEW" and status == "CERTIFIED_COMPLIANT":
         status = "NEEDS_REVISION"
+
+    # Convergence safety valve: the proposal HAS been audited (router_node now
+    # always routes here first), but if we've exhausted the revision budget and
+    # still can't auto-resolve it (status would loop back as NEEDS_REVISION),
+    # escalate to a human compliance officer rather than ending the session on a
+    # non-terminal status.  AUTO_APPROVE and HUMAN_ESCALATION outcomes are
+    # already terminal and pass through untouched.
+    if iteration >= MAX_ITERATIONS and status == "NEEDS_REVISION":
+        status = "CRITICAL_BLOCK"
+        critique += (
+            f"\n\n[SBC] Max revision budget ({MAX_ITERATIONS}) reached without "
+            f"convergence — escalating to a human compliance officer."
+        )
 
     if state.get("is_real_time"):
         print(f"\n\033[1;35m{critique}\033[0m")
@@ -341,10 +374,12 @@ def router_node(state: AgentState) -> str:
     if not state.get("supervisor_enabled", True):
         return END
 
-    # Convergence safety valve: after MAX_ITERATIONS, escalate to human review
-    if state.get("revision_count", 0) >= MAX_ITERATIONS:
-        return END
-
+    # Always audit — including the final (MAX_ITERATIONS) round.  The
+    # convergence cap is enforced AFTER the audit (auditor_node escalates an
+    # un-converged final round to a human block in compliance_router), so the
+    # last proposal is never returned ungated.  Previously this returned END
+    # here, which let the MAX_ITERATIONS proposal bypass the auditor entirely
+    # and be reported with a stale, non-terminal status.
     return "auditor_node"
 
 
@@ -373,7 +408,10 @@ def compliance_router(state: AgentState) -> str:
     if status == "CRITICAL_BLOCK":
         return END  # Hard block, no retry — even for REVIEW
 
-    # Convergence safety valve: after MAX_ITERATIONS, escalate to human review
+    # Convergence backstop: auditor_node already rewrites an un-converged final
+    # round to CRITICAL_BLOCK (handled above), so this END is only reached if a
+    # non-terminal status somehow survives to the cap — it guarantees the loop
+    # can never exceed MAX_ITERATIONS regardless.
     if state.get("revision_count", 0) >= MAX_ITERATIONS:
         return END
 
