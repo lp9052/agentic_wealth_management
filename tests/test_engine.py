@@ -70,6 +70,33 @@ def test_proposer_node_supervised_basic(monkeypatch, fake_proposal):
     assert engine._llm is sentinel
 
 
+def test_proposer_node_preserves_evidence_path_through_state(monkeypatch, fake_proposal):
+    """Regression: evidence_path must survive the proposal_json round-trip.
+
+    proposer_node serialises the proposal into AgentState as JSON; auditor_node
+    rehydrates it via TradeProposal.from_proposal_json.  If evidence_path is
+    dropped in serialisation, _score_evidence_coverage sees an empty path and
+    scores every non-ACK evidence item C_ev=0 — making graded rules incurable.
+    """
+    engine._llm = MagicMock()
+    monkeypatch.setattr(engine, "generate_proposal", lambda **kw: fake_proposal)
+    monkeypatch.setattr("app.auditor.typo_filter.correct_typos", lambda t: t)
+
+    state = {
+        "client_id": "C1", "client_data": {}, "prompt": "buy SPY",
+        "supervisor_enabled": True, "revision_count": 0,
+    }
+    out = proposer_node(state)
+
+    # Serialised form carries the path
+    serialised_ev = out["proposal_json"]["provided_evidence"][0]
+    assert serialised_ev["evidence_path"] == "g"
+
+    # ...and the auditor's rehydration preserves it
+    rehydrated = TradeProposal.from_proposal_json(out["proposal_json"], "C1")
+    assert rehydrated.provided_evidence[0].evidence_path == "g"
+
+
 def test_proposer_node_review_action_sets_needs_revision(monkeypatch, fake_proposal):
     fake_proposal.action = "REVIEW"
     fake_proposal.user_question = "Are you sure?"

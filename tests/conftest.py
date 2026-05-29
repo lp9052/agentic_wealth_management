@@ -52,6 +52,8 @@ def _reset_module_caches() -> Iterator[None]:
         sys.modules["app.database.client_db"]._client_cache = {}
     if "app.proposer.agent" in sys.modules:
         sys.modules["app.proposer.agent"]._regulations_cache = None
+    if "app.proposer.rag" in sys.modules:
+        sys.modules["app.proposer.rag"]._vectorstore = None
     yield
 
 
@@ -295,6 +297,18 @@ def _seed_minimal_db(db_path: str) -> None:
               ("OP.bool_neq.T", "OP.bool_neq", "prompt_signal", "CONTAINS", "SIG_BOOL_NEQ"))
     c.execute("INSERT INTO kyc_requirements VALUES (?, ?, ?, ?, ?, ?)",
               ("OP.bool_neq.K", "OP.bool_neq.T", "kyc_verified", "!=", "False", "profile"))
+
+    # K-bool-GT:  threshold='True' (bool literal) but operator is GREATER_THAN.
+    # Exercises the bool-block fall-through in _kyc_passes — the threshold is
+    # recognised as boolean, but neither EQUALS nor NOT_EQUALS matches, so it
+    # drops to the numeric path (float('True') raises) then the string path
+    # (no > handler) and conservatively passes.
+    c.execute("INSERT INTO rule_clauses VALUES (?, ?, ?)",
+              ("OP.bool_gt", "OP_COVERAGE", "bool literal with GREATER_THAN"))
+    c.execute("INSERT INTO trigger_conditions VALUES (?, ?, ?, ?, ?)",
+              ("OP.bool_gt.T", "OP.bool_gt", "prompt_signal", "CONTAINS", "SIG_BOOL_GT"))
+    c.execute("INSERT INTO kyc_requirements VALUES (?, ?, ?, ?, ?, ?)",
+              ("OP.bool_gt.K", "OP.bool_gt.T", "kyc_verified", ">", "True", "profile"))
 
     # K-num-LT
     c.execute("INSERT INTO rule_clauses VALUES (?, ?, ?)",

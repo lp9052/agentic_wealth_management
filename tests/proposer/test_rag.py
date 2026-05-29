@@ -31,6 +31,25 @@ def test_init_chroma_builds_vectorstore(monkeypatch):
     assert captured["embedding_function"] is fake_embed
 
 
+def test_init_chroma_caches_vectorstore(monkeypatch):
+    """init_chroma builds the store once and returns the cached handle after."""
+    build_count = {"n": 0}
+
+    monkeypatch.setattr(rag, "GoogleGenerativeAIEmbeddings", lambda model: object())
+
+    def fake_chroma(**kw):
+        build_count["n"] += 1
+        return MagicMock()
+
+    monkeypatch.setattr(rag, "Chroma", fake_chroma)
+    rag._vectorstore = None
+
+    first = init_chroma()
+    second = init_chroma()
+    assert first is second
+    assert build_count["n"] == 1
+
+
 def test_ingest_regulations_loads_and_adds_documents(tmp_path, monkeypatch, capsys):
     regs = [{
         "id": "FINRA_2111",

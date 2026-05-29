@@ -360,6 +360,20 @@ def test_evaluate_kyc_bool_not_equals(evalsetup, monkeypatch):
     assert failures == []
 
 
+def test_evaluate_kyc_bool_threshold_with_gt_operator_falls_through(evalsetup, monkeypatch):
+    """threshold='True' but operator is GREATER_THAN.
+
+    The bool block is entered (threshold is a bool literal) but neither EQUALS
+    nor NOT_EQUALS matches, so _kyc_passes falls through to the numeric path
+    (float('True') raises) and then the string path (no > handler), landing on
+    the conservative `return True`.  Regression guard for the bool-detection
+    narrowing that removed '0'/'1' from the bool set."""
+    _fire(monkeypatch, "SIG_BOOL_GT")
+    delta, _ = _eval(_proposal(trade_size_usd=1_000.0),
+                     _client_state(equity=100_000.0, kyc=True), prompt="p")
+    assert not any(d.clause_id == "OP.bool_gt" for d in delta.failed_details)
+
+
 def test_evaluate_kyc_num_less_than_pass(evalsetup, monkeypatch):
     """age < 30, client age=25 → KYC passes."""
     _fire(monkeypatch, "SIG_NUM_LT")

@@ -156,7 +156,12 @@ def proposer_node(state: AgentState) -> dict:
                 "rationale": proposal.rationale,
                 "user_question": proposal.user_question,
                 "provided_evidence": [
-                    {"evidence_id": e.evidence_id, "value": e.value, "scrap": e.scrap}
+                    {
+                        "evidence_id": e.evidence_id,
+                        "value": e.value,
+                        "scrap": e.scrap,
+                        "evidence_path": e.evidence_path,
+                    }
                     for e in proposal.provided_evidence
                 ],
             },

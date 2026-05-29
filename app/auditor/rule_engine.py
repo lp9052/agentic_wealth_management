@@ -407,9 +407,14 @@ def _kyc_passes(kyc: KYCRequirement, client_state: dict, is_forced: bool = False
 
     threshold = kyc.threshold
 
-    # Boolean comparison
-    if threshold in ("0", "1", "true", "false", "True", "False"):
-        bool_threshold = threshold in ("1", "true", "True")
+    # Boolean comparison.  Only literal true/false thresholds route here —
+    # "0"/"1" are intentionally excluded so numeric KYCs like `field == 0`
+    # take the numeric path below (0.0 == 0.0) rather than being coerced to
+    # bool(value) == False, which silently mis-handles non-zero numeric values
+    # (e.g. 0.5 → True → False).  Booleans still compare correctly because
+    # float(True)/float(False) == 1.0/0.0 matches a "1"/"0" threshold there.
+    if threshold in ("true", "false", "True", "False"):
+        bool_threshold = threshold in ("true", "True")
         bool_value = bool(value) if not isinstance(value, bool) else value
         if kyc.operator == KYCOperator.EQUALS:
             return bool_value == bool_threshold

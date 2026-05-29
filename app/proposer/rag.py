@@ -19,16 +19,23 @@ load_dotenv()
 CHROMA_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "data", "chroma_db")
 CHROMA_DIR = os.path.normpath(CHROMA_DIR)
 
+# Cached vectorstore handle — building it instantiates the Google embeddings
+# client and opens the persistent store, so we do it once and reuse it across
+# every retrieve_regulations call on a revision cycle.
+_vectorstore = None
+
 
 def init_chroma():
-    """Initialize ChromaDB vectorstore with Google embeddings."""
-    embeddings = GoogleGenerativeAIEmbeddings(model="models/gemini-embedding-001")
-    vectorstore = Chroma(
-        collection_name="regulations",
-        embedding_function=embeddings,
-        persist_directory=CHROMA_DIR,
-    )
-    return vectorstore
+    """Initialize (and cache) the ChromaDB vectorstore with Google embeddings."""
+    global _vectorstore
+    if _vectorstore is None:
+        embeddings = GoogleGenerativeAIEmbeddings(model="models/gemini-embedding-001")
+        _vectorstore = Chroma(
+            collection_name="regulations",
+            embedding_function=embeddings,
+            persist_directory=CHROMA_DIR,
+        )
+    return _vectorstore
 
 
 def ingest_regulations():
